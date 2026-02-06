@@ -30,7 +30,7 @@ void CRM_init(const crm_config_t* cfg, const crm_callbacks_t* cb) {
 
     if (cb) g_cb = *cb;
     g_inited = 1;
-    printf("[CRM] Module Initialized (Warn:%.1fs, AEB:%.1fs)\n", 
+    printf(" ========= COLLISION RISK MODULE STARTED (Warn:%.1fs, AEB:%.1fs =========)\n", 
            g_cfg.ttc_warn_sec, g_cfg.ttc_aeb_sec);
 }
 

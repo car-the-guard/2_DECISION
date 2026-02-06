@@ -69,7 +69,7 @@ static void* bt_rx_thread(void* arg) {
         fprintf(stderr, "[BT] Open failed: %s\n", g_cfg.uart_dev);
         return NULL;
     }
-    printf("[BT Debug] Port Opened (Blocking Mode). Waiting for data...\n");
+    // printf("[BT Debug] Port Opened (Blocking Mode). Waiting for data...\n");
 
     char buf[128]; // 명령어 조립용 버퍼
     int idx = 0;

@@ -156,7 +156,7 @@ int main(int argc, char** argv) {
     signal(SIGINT, sig_handler);
     signal(SIGTERM, sig_handler);
 
-    printf("\n=== D3-G Decision Board System Initializing (Smart Send Mode) ===\n");
+    printf("\n========= D3-G Decision Board System Started =========\n");
 
     DIM_init();
 
@@ -196,7 +196,7 @@ int main(int argc, char** argv) {
     pthread_t ai_thr;
     pthread_create(&ai_thr, NULL, ai_rx_thread, (void*)"/dev/ttyAMA2");
 
-    printf("=== System Started. Loop Running. ===\n");
+    // printf("=== System Started. Loop Running. ===\n");
 
     uint32_t loop_count = 0;
     clock_gettime(CLOCK_MONOTONIC, &g_last_bt_time); // 초기 시간 설정
@@ -206,9 +206,18 @@ int main(int argc, char** argv) {
 
         if (loop_count % 500 == 0) WL_send_direction(); // (NULL이라 아무 일도 안 함)
 
-        if (loop_count % 50 == 0) {
+        if (loop_count % 10 == 0) {
             dim_snapshot_t s;
             DIM_get_snapshot(&s);
+
+            printf("[DASH] SPD: %4.1f m/s | ACC: %5.2f m/s2 | SONAR: %5.1f cm | TTC: %5.2f s | HDG: %3d deg\n", 
+                   s.cur_speed_mps,    // 엔코더 속도
+                   s.cur_accel_mps2,   // 가속도
+                   s.ultra_dist_cm,    // 초음파 거리
+                   s.calc_ttc_sec,      // TTC (충돌 예측 시간)
+                   s.heading_deg
+            );
+            fflush(stdout); // 즉시 화면에 표시
         }
 
         // ----------------------------------------------------------------

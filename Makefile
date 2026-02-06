@@ -33,7 +33,8 @@ SRC = \
     src/wl_sender.c \
     src/uart.c \
     src/can.c \
-    src/bluetooth.c
+    src/bluetooth.c \
+	src/can_security_utils.c \
 
 # [6] Object Files (자동 생성)
 # .c 파일 목록을 .o 파일 목록으로 자동 변환
