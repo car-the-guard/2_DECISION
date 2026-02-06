@@ -1,3 +1,4 @@
+/* src/main.c */
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,19 +11,24 @@
 #include <pthread.h>
 
 // [Modules]
-#include "driving_info.h"       // 데이터 저장소 (DIM)
-#include "can.h"                // CAN 통신 (CANIF)
-#include "uart.h"     // WL 무선 통신 (UARTIF) - (헤더 파일명 확인 필요, 보통 uart_interface.h)
-#include "bluetooth.h"          // 조이스틱 통신 (BT)
-#include "collision_risk.h"     // 충돌 위험 판단 (CRM)
-#include "collision_response.h" // 사고 대응 (CRESP)
-#include "wl_sender.h"          // WL 패킷 전송 (WL)
+#include "driving_info.h"
+#include "can.h"
+#include "uart.h"
+#include "bluetooth.h"
+#include "collision_risk.h"
+#include "collision_response.h"
+#include "wl_sender.h"
 
 // =========================================================
 // [Global Control]
 // =========================================================
 static volatile int g_running = 1;
-static int g_aeb_active = 0; // AEB 작동 중인지 체크 (BT 무시용)
+static int g_aeb_active = 0;
+
+// [메모장] 현재 운전자 명령 저장용 (전역 변수)
+static canif_motor_cmd_t g_current_cmd = {0, 0, 0, 0};
+static struct timespec g_last_bt_time = {0, 0}; // 마지막 수신 시간
+static pthread_mutex_t g_cmd_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static void sig_handler(int sig) {
     (void)sig;
@@ -30,53 +36,66 @@ static void sig_handler(int sig) {
 }
 
 // =========================================================
-// [1. CAN Callbacks] 센서 데이터 수신 -> DIM 저장
+// [Bluetooth Callbacks] 수신 즉시 1발 발사! (One-Shot)
 // =========================================================
-static void cb_can_ultrasonic(uint16_t dist_cm) { 
-    DIM_update_ultra((float)dist_cm); 
+static void on_bt_cmd(const char* cmd) {
+    char move_dir = 'F'; 
+    int speed_val = 0;
+    char steer_dir = 'R'; 
+    int angle_val = 0;
+
+    int parsed = sscanf(cmd, " %c%d %c%d", &move_dir, &speed_val, &steer_dir, &angle_val);
+    if (parsed < 2) return;
+    if (parsed < 4) { steer_dir = 'R'; angle_val = 0; }
+
+    // 임시 구조체 생성
+    canif_motor_cmd_t m = {0, 0, 0, 0};
+    if (move_dir == 'B') m.bwd = (uint8_t)speed_val;
+    else m.fwd = (uint8_t)speed_val;
+    if (steer_dir == 'L') m.left = (uint8_t)angle_val;
+    else m.right = (uint8_t)angle_val;
+
+    pthread_mutex_lock(&g_cmd_lock);
+    
+    // [1] 값이 바뀌었는지 확인
+    int is_changed = (m.fwd != g_current_cmd.fwd || m.bwd != g_current_cmd.bwd || 
+                      m.left != g_current_cmd.left || m.right != g_current_cmd.right);
+
+    // [2] 전역 변수 업데이트 (메모장 기록)
+    g_current_cmd = m;
+    clock_gettime(CLOCK_MONOTONIC, &g_last_bt_time); // 시간 갱신
+    
+    pthread_mutex_unlock(&g_cmd_lock);
+
+    // [3] 값이 바뀌었다면? -> 여기서 즉시 "딱 1발" 발사!
+    if (is_changed && !g_aeb_active) {
+        CANIF_send_motor_cmd(&m);
+        // printf("[BT] Change! Sent 1 packet.\n");
+    }
 }
 
-static void cb_can_speed(float speed_mps) {
-    DIM_update_speed(speed_mps);
-}
-
-static void cb_can_accel(float accel_mps2) {
-    DIM_update_accel(accel_mps2);
-}
-
-static void cb_can_rel_speed(float rel_mps) {
-    DIM_update_rel_speed(rel_mps);
-}
-
-static void cb_can_heading(uint16_t deg) {
-    DIM_update_heading(deg);
-    CRESP_update_heading(deg); 
-}
-
-// [수정 포인트 1] 인자 추가 (void -> uint8_t is_crash)
-// can.h의 정의와 맞춰야 합니다.
+// =========================================================
+// [CAN & Sensor Callbacks] (기존 유지)
+// =========================================================
+static void cb_can_ultrasonic(uint16_t dist_cm) { DIM_update_ultra((float)dist_cm); }
+static void cb_can_speed(float speed_mps) { DIM_update_speed(speed_mps); }
+static void cb_can_accel(float accel_mps2) { DIM_update_accel(accel_mps2); }
+static void cb_can_rel_speed(float rel_mps) { DIM_update_rel_speed(rel_mps); }
+static void cb_can_heading(uint16_t deg) { DIM_update_heading(deg); CRESP_update_heading(deg); }
 static void cb_can_collision_detected(uint8_t is_crash) {
-    (void)is_crash; // 안 쓰더라도 인자는 받아야 함
+    (void)is_crash;
     printf("[Main] !!! PHYSICAL IMPACT DETECTED !!!\n");
     CRESP_trigger_impact(); 
 }
 
-// =========================================================
-// [2. CRM (Risk) Callbacks] 위험 판단 결과 -> 제어
-// =========================================================
 static void cb_crm_set_brake_lamp(int level) {
-    // 1. 레벨에 따른 모드 결정
     canif_brake_mode_t current_mode = BRAKE_OFF;
-    
-    if (level == 1) current_mode = BRAKE_ON;           // Level 1: 켜짐
-    else if (level >= 2) current_mode = BRAKE_BLINK;   // Level 2, 3: 깜빡임
+    if (level == 1) current_mode = BRAKE_ON;
+    else if (level >= 2) current_mode = BRAKE_BLINK;
 
-    // 2. 상태 변경 체크 (중복 전송 방지)
     static canif_brake_mode_t last_mode = BRAKE_OFF;
-
     if (current_mode != last_mode) {
         CANIF_send_brake_light(current_mode);
-        // printf("Brake Light: %d -> %d\n", last_mode, current_mode); // 디버깅용
         last_mode = current_mode;
     }
 }
@@ -88,178 +107,40 @@ static void cb_crm_set_aeb_cmd(int enable) {
             g_aeb_active = 1;
             canif_motor_cmd_t stop = {0, 0, 0, 0};
             CANIF_send_motor_cmd(&stop);
-            // AEB 신호 전송 (추가)
             CANIF_send_aeb(1);
         }
     } else {
         if (g_aeb_active) {
             printf("[Main] AEB Released.\n");
             g_aeb_active = 0;
-            // AEB 해제 전송
             CANIF_send_aeb(0);
         }
     }
 }
 
-static void cb_crm_notify_accident(int severity) {
-    WL_send_accident((uint8_t)severity);
-}
+static void cb_crm_notify_accident(int severity) { WL_send_accident((uint8_t)severity); }
+static void cb_cresp_notify_accident(int severity) { WL_send_accident((uint8_t)severity); }
 
-// =========================================================
-// [3. CRESP (Response) Callbacks] 사고 발생 후 처리
-// =========================================================
-static void cb_cresp_notify_accident(int severity) {
-    WL_send_accident((uint8_t)severity);
-}
-
-// =========================================================
-// [4. Bluetooth Callbacks] 운전자 조작 -> 모터 제어
-// =========================================================
-// =========================================================
-// [4. Bluetooth Callbacks] 점사(Burst) 전송 모드
-// =========================================================
-// static void on_bt_cmd(const char* cmd) {
-//     // 1. AEB 작동 중이면 무시
-//     if (g_aeb_active) return;
-
-//     char move_dir = 'F'; 
-//     int speed_val = 0;
-//     char steer_dir = 'R'; 
-//     int angle_val = 0;
-
-//     int parsed = sscanf(cmd, " %c%d %c%d", &move_dir, &speed_val, &steer_dir, &angle_val);
-//     if (parsed < 2) return;
-//     if (parsed < 4) { steer_dir = 'R'; angle_val = 0; }
-
-//     // 명령 패킷 생성
-//     canif_motor_cmd_t m = {0, 0, 0, 0};
-//     if (move_dir == 'B') m.bwd = (uint8_t)speed_val;
-//     else m.fwd = (uint8_t)speed_val;
-//     if (steer_dir == 'L') m.left = (uint8_t)angle_val;
-//     else m.right = (uint8_t)angle_val;
-
-//     // ---------------------------------------------------------
-//     // [점사 로직] 값이 바뀌었을 때만 -> 5발 연속 발사!
-//     // ---------------------------------------------------------
-//     static canif_motor_cmd_t last_m = {0, 0, 0, 0};
-
-//     // 1. 값이 이전과 다른지 확인
-//     if (m.fwd != last_m.fwd || m.bwd != last_m.bwd || 
-//         m.left != last_m.left || m.right != last_m.right) {
-        
-//         // 2. 값이 바뀌었으면 5번 반복해서 전송 (Burst)
-//         // (10번은 위험하니 5~8번 추천)
-//         for (int i = 0; i < 5; i++) {
-//             CANIF_send_motor_cmd(&m);
-            
-//             // [중요] 너무 빨리 쏘면 SPI가 체할 수 있으니 
-//             // 패킷 사이에 아주 미세한 숨돌릴 틈(0.002초)을 줍니다.
-//             usleep(2000); 
-//         }
-
-//         // 3. (옵션) 디버깅 로그 - 5발 쐈다고 알려줌
-//         // printf("[BT] Burst Send! (x5) Val: %d\n", speed_val);
-
-//         // 4. 현재 상태 저장
-//         last_m = m;
-//     }
-// }
-
-static void on_bt_cmd(const char* cmd) {
-    if (g_aeb_active) return;
-
-    char move_dir = 'F'; 
-    int speed_val = 0;
-    char steer_dir = 'R'; 
-    int angle_val = 0;
-
-    int parsed = sscanf(cmd, " %c%d %c%d", &move_dir, &speed_val, &steer_dir, &angle_val);
-    if (parsed < 2) return;
-    if (parsed < 4) { steer_dir = 'R'; angle_val = 0; }
-
-    canif_motor_cmd_t m = {0, 0, 0, 0};
-    if (move_dir == 'B') m.bwd = (uint8_t)speed_val;
-    else m.fwd = (uint8_t)speed_val;
-    if (steer_dir == 'L') m.left = (uint8_t)angle_val;
-    else m.right = (uint8_t)angle_val;
-
-    // ---------------------------------------------------------
-    // [하이브리드 로직] 점사(Burst) + 생존 신고(Heartbeat)
-    // ---------------------------------------------------------
-    static canif_motor_cmd_t last_m = {0, 0, 0, 0};
-    static struct timespec last_time = {0, 0};
-
-    // 1. 현재 시간 구하기
-    struct timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
-
-    // 시간 차이 계산 (밀리초 ms 단위)
-    long long diff_ms = (now.tv_sec - last_time.tv_sec) * 1000 + 
-                        (now.tv_nsec - last_time.tv_nsec) / 1000000;
-
-    // 2. 값이 바뀌었는지 확인
-    int is_changed = (m.fwd != last_m.fwd || m.bwd != last_m.bwd || 
-                      m.left != last_m.left || m.right != last_m.right);
-
-    // 3. 차가 움직여야 하는 상태인지 확인 (정지 상태가 아님)
-    int is_moving = (m.fwd > 0 || m.bwd > 0 || m.left > 0 || m.right > 0);
-
-    // =========================================================
-    // Case A: 값이 바뀌었다! (버튼 누름 or 뗌) -> 5발 점사 (Burst)
-    // =========================================================
-    if (is_changed) {
-        for (int i = 0; i < 5; i++) {
-            CANIF_send_motor_cmd(&m);
-            usleep(2000); // 2ms 간격
-        }
-        
-        last_m = m;       // 상태 업데이트
-        last_time = now;  // 시간 초기화
-        // printf("[BT] Change! Burst 5 packets.\n");
-    }
-    // =========================================================
-    // Case B: 값은 그대로인데, 누르고 있다! -> 0.2초마다 1발 (Heartbeat)
-    // =========================================================
-    else if (is_moving && diff_ms >= 200) { 
-        // 200ms(0.2초)가 지났고, 차가 움직이는 중이라면 1발만 전송
-        CANIF_send_motor_cmd(&m);
-        
-        last_time = now; // 시간 초기화
-        // printf("[BT] Keep-alive (Heartbeat)...\n");
-    }
-    // =========================================================
-    // Case C: 정지 상태이고 시간만 흐름 -> 아무것도 안 함 (침묵)
-    // =========================================================
-}
-
-// =========================================================
-// [5. AI UART Thread] 카메라 AI 정보 수신
-// =========================================================
+// AI UART 수신 (그대로 유지)
 static void* ai_rx_thread(void* arg) {
     const char* dev = (const char*)arg;
     int fd = open(dev, O_RDWR | O_NOCTTY);
     if (fd < 0) return NULL;
-
+    
     struct termios tty;
-    if(tcgetattr(fd, &tty) == 0) {
-        cfsetospeed(&tty, B9600);
-        cfsetispeed(&tty, B9600);
-        tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8 | CLOCAL | CREAD;
-        tty.c_iflag = 0; tty.c_oflag = 0; tty.c_lflag = 0;
-        tty.c_cc[VMIN] = 1; tty.c_cc[VTIME] = 1;
-        tcsetattr(fd, TCSANOW, &tty);
-    }
+    tcgetattr(fd, &tty);
+    cfsetospeed(&tty, B9600);
+    cfsetispeed(&tty, B9600);
+    tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8 | CLOCAL | CREAD;
+    tty.c_iflag = 0; tty.c_oflag = 0; tty.c_lflag = 0;
+    tty.c_cc[VMIN] = 1; tty.c_cc[VTIME] = 1;
+    tcsetattr(fd, TCSANOW, &tty);
 
     uint8_t buf[64];
     while (g_running) {
         int n = read(fd, buf, sizeof(buf));
-        if (n > 0) {
-            if (buf[0] == 0xA1 && n >= 2) { 
-                uint8_t lane = buf[1];
-                if (lane >= 1 && lane <= 3) {
-                    DIM_update_lane((dim_lane_t)lane);
-                }
-            }
+        if (n > 0 && buf[0] == 0xA1 && n >= 2) {
+            if (buf[1] >= 1 && buf[1] <= 3) DIM_update_lane((dim_lane_t)buf[1]);
         }
         usleep(10000);
     }
@@ -275,7 +156,7 @@ int main(int argc, char** argv) {
     signal(SIGINT, sig_handler);
     signal(SIGTERM, sig_handler);
 
-    printf("\n=== D3-G Decision Board System Initializing ===\n");
+    printf("\n=== D3-G Decision Board System Initializing (Smart Send Mode) ===\n");
 
     DIM_init();
 
@@ -288,30 +169,25 @@ int main(int argc, char** argv) {
         .on_collision = cb_can_collision_detected
     };
     
-    // can.h를 사용하므로 설정
     canif_config_t can_cfg = { .ifname = "can0" };
     if (CANIF_init(&can_cfg, &can_cbs) != 0) return -1;
 
-    uartif_config_t uart_cfg = { .dev_path = "/dev/ttyAMA0", .baudrate = 9600 };
-    if (UARTIF_init(&uart_cfg) != 0) return -1;
+    // [중요 수정] 디버그 포트(ttyAMA0) 충돌 방지를 위해 무선 송신 비활성화
+    // uartif_config_t uart_cfg = { .dev_path = "/dev/ttyAMA0", .baudrate = 9600 };
+    // if (UARTIF_init(&uart_cfg) != 0) return -1;
 
+    // 블루투스 (ttyAMA1)는 정상 작동
     bt_config_t bt_cfg = { .uart_dev = "/dev/ttyAMA1", .baud = 9600 };
     if (BT_init(&bt_cfg, on_bt_cmd) != 0) fprintf(stderr, "BT Init Failed\n");
 
-    crm_callbacks_t crm_cb = {
-        .set_brake_lamp = cb_crm_set_brake_lamp,
-        .set_aeb_cmd = cb_crm_set_aeb_cmd,
-        .notify_accident = cb_crm_notify_accident
-    };
+    crm_callbacks_t crm_cb = { .set_brake_lamp = cb_crm_set_brake_lamp, .set_aeb_cmd = cb_crm_set_aeb_cmd, .notify_accident = cb_crm_notify_accident };
     CRM_init(NULL, &crm_cb);
 
-    cresp_callbacks_t cresp_cb = {
-        .set_brake_lamp = cb_crm_set_brake_lamp,
-        .notify_accident = cb_cresp_notify_accident
-    };
+    cresp_callbacks_t cresp_cb = { .set_brake_lamp = cb_crm_set_brake_lamp, .notify_accident = cb_cresp_notify_accident };
     CRESP_init(NULL, &cresp_cb);
 
-    WL_init(UARTIF_write_raw);
+    // [중요 수정] UARTIF를 껐으므로 WL 모듈도 NULL로 초기화 (에러 방지)
+    WL_init(NULL); 
 
     CANIF_start();
     BT_start();
@@ -323,37 +199,60 @@ int main(int argc, char** argv) {
     printf("=== System Started. Loop Running. ===\n");
 
     uint32_t loop_count = 0;
-    
+    clock_gettime(CLOCK_MONOTONIC, &g_last_bt_time); // 초기 시간 설정
+
     while (g_running) {
         CRM_run_step();
 
-        if (loop_count % 500 == 0) { 
-            WL_send_direction();
-        }
+        if (loop_count % 500 == 0) WL_send_direction(); // (NULL이라 아무 일도 안 함)
 
-        if (loop_count % 5 == 0) {
+        if (loop_count % 50 == 0) {
             dim_snapshot_t s;
             DIM_get_snapshot(&s);
-            printf("엔코더 :%4.1fm/s | 상대 속도 :%4.1fm/s | 가속도 :%4.1fm/s^2 | 초음파 :%4.1fcm | TTC :%5.1fs | AEB :%d | 방향 :%3d\n", 
-                   s.cur_speed_mps,    // 1. 현재 속도 (엔코더 기반)
-                   s.rel_speed_mps,    // 2. 상대 속도 (TTC 계산의 핵심)
-                   s.cur_accel_mps2,   // 3. 가속도 (감속 중인지 확인용)
-                   s.ultra_dist_cm,    // 4. 거리
-                   s.calc_ttc_sec,     // 5. 최종 계산된 TTC
-                   g_aeb_active,       // 6. AEB 발동 상태 (0 or 1)
-                   s.heading_deg);     // 7. 차량 방향
         }
 
-        usleep(10000); 
+        // ----------------------------------------------------------------
+        // [스마트 하트비트]
+        // 값이 유지되고 있을 때(버튼 꾹)는 0.1초마다 보내주고,
+        // 정지 상태(0,0,0,0)일 때는 아예 보내지 않음 (CAN 버스 침묵)
+        // ----------------------------------------------------------------
+        if (loop_count % 10 == 0) { // 10ms * 10 = 100ms 주기
+            if (!g_aeb_active) {
+                pthread_mutex_lock(&g_cmd_lock);
+                
+                // Watchdog (0.5초 동안 BT 수신 없으면 강제 초기화)
+                struct timespec now;
+                clock_gettime(CLOCK_MONOTONIC, &now);
+                long long diff = (now.tv_sec - g_last_bt_time.tv_sec) * 1000 + 
+                                 (now.tv_nsec - g_last_bt_time.tv_nsec) / 1000000;
+                
+                if (diff > 500) { 
+                    g_current_cmd.fwd = 0; g_current_cmd.bwd = 0;
+                    g_current_cmd.left = 0; g_current_cmd.right = 0;
+                }
+                
+                canif_motor_cmd_t cmd_to_send = g_current_cmd;
+                pthread_mutex_unlock(&g_cmd_lock);
+
+                // [핵심 조건] 차가 움직여야 할 때만 주기적으로 보냄
+                // (정지 상태일 때는 on_bt_cmd에서 마지막으로 1번 보내고 끝남)
+                if (cmd_to_send.fwd > 0 || cmd_to_send.bwd > 0 || 
+                    cmd_to_send.left > 0 || cmd_to_send.right > 0) {
+                    
+                    CANIF_send_motor_cmd(&cmd_to_send);
+                }
+            }
+        }
+
+        usleep(10000); // 10ms tick
         loop_count++;
     }
 
     CRESP_stop();
     BT_stop();
-    UARTIF_stop();
+    // UARTIF_stop(); // 주석 처리됨
     CANIF_stop();
     DIM_deinit();
     pthread_join(ai_thr, NULL);
-
     return 0;
 }

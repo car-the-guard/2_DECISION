@@ -2,6 +2,7 @@
 #define CAN_H
 
 #include <stdint.h>
+#include "can_security_utils.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -11,6 +12,7 @@ extern "C" {
 // [1] CAN ID 정의 (src/can.c의 switch문과 일치)
 // =========================================================
 #define CANID_COLLISION   0x08  // 충돌 감지 (RX)
+#define CANID_PRETENSION  0x09  // 프리텐셔너 (TX)
 #define CANID_MOTOR_CMD   0x12  // 모터 제어 (TX)
 #define CANID_AEB_CTRL    0x15  // AEB 제어 (TX)
 #define CANID_BRAKE_LIGHT 0x16  // 브레이크등 제어 (TX)
@@ -22,6 +24,9 @@ extern "C" {
 #define CANID_AI_LANE     0x80  // AI 차선 인식 (RX)
 #define CANID_HEADING     0x84  // 지자기(방향) (RX)
 
+
+#define PT_CMD_OFF  0x00  // 프리텐션 종료
+#define PT_CMD_ON   0xFF  // 프리텐션 동작
 // =========================================================
 // [2] 구조체 정의
 // =========================================================
@@ -68,6 +73,7 @@ void CANIF_stop(void);
 int CANIF_send_motor_cmd(const canif_motor_cmd_t* cmd);
 int CANIF_send_aeb(uint8_t active);      // 1: ON, 0: OFF
 int CANIF_send_brake_light(uint8_t mode); // 0: OFF, 1: ON, 2: BLINK
+int CANIF_send_pretension(uint8_t cmd);
 
 #ifdef __cplusplus
 }

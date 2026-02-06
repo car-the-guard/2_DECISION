@@ -1,5 +1,8 @@
 #define _GNU_SOURCE
 #include "can.h"
+// [추가] 보안 유틸리티 헤더 포함 (MAC 계산용)
+#include "can_security_utils.h" 
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,18 +14,20 @@
 #include <sys/socket.h>
 #include <linux/can.h>
 #include <linux/can/raw.h>
-#include <time.h> // for timestamp
+#include <time.h>
 
 static int g_can_fd = -1;
 static volatile int g_running = 0;
 static pthread_t g_rx_thr;
 static canif_rx_handlers_t g_rxh;
 
+// [전역] 프리텐셔너 송신 카운터
+static uint8_t g_pt_tx_counter = 0;
+
 // [유틸] 현재시간(ms) 가져오기 (Timestamp용)
 static uint16_t get_timestamp_u16() {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
-    // 하위 16비트만 사용
     uint32_t ms = (ts.tv_sec * 1000) + (ts.tv_nsec / 1000000);
     return (uint16_t)(ms & 0xFFFF);
 }
@@ -62,61 +67,53 @@ static void* rx_thread(void* arg) {
     struct can_frame fr;
     
     while (g_running) {
+        // 읽기는 Blocking으로 해도 됨 (별도 스레드니까)
         int n = read(g_can_fd, &fr, sizeof(fr));
         if (n < (int)sizeof(struct can_frame)) continue;
 
-        // [디버그] ID 확인용 (필요시 주석 해제)
-        // printf("[CAN RAW] ID: 0x%X DLC: %d\n", fr.can_id, fr.can_dlc);
-
         switch (fr.can_id) {
-            case CANID_COLLISION: // 0x08 (Uint8)
+            case CANID_COLLISION:
                 if (g_rxh.on_collision && fr.can_dlc >= 1) 
                     g_rxh.on_collision(fr.data[0]);
                 break;
 
-            case CANID_ULTRASONIC: // 0x24 (Uint16 BE)
+            case CANID_ULTRASONIC:
                 if (g_rxh.on_ultra && fr.can_dlc >= 2) 
                     g_rxh.on_ultra(parse_be16(&fr.data[0]));
                 break;
 
-            case CANID_ACCEL_FB: // 0x28 (Uint32 BE, Scale: 1000)
-                printf("[DEBUG 0x28] Raw: %02X %02X %02X %02X\n", 
-                   fr.data[0], fr.data[1], fr.data[2], fr.data[3]);
+            case CANID_ACCEL_FB:
                 if (g_rxh.on_accel && fr.can_dlc >= 4) {
                     uint32_t raw = parse_be32(&fr.data[0]);
                     g_rxh.on_accel((float)raw / 1000.0f);
                 }
                 break;
 
-            case CANID_REL_SPEED: // 0x2C (Int32 BE, Scale: 100)
+            case CANID_REL_SPEED:
                 if (g_rxh.on_rel_speed && fr.can_dlc >= 4) {
-                    // Int32 캐스팅 주의
                     int32_t raw = (int32_t)parse_be32(&fr.data[0]);
                     g_rxh.on_rel_speed((float)raw / 100.0f);
                 }
                 break;
 
-            case CANID_AI_OBJ: // 0x30 (Uint8)
+            case CANID_AI_OBJ:
                 if (g_rxh.on_ai_obj && fr.can_dlc >= 1)
                     g_rxh.on_ai_obj(fr.data[0]);
                 break;
 
-            case CANID_SPEED_FB: // 0x38 (Uint32 BE, Scale: 100)
-                printf("[DEBUG 0x38] Raw: %02X %02X %02X %02X\n", 
-                   fr.data[0], fr.data[1], fr.data[2], fr.data[3]);
+            case CANID_SPEED_FB:
                 if (g_rxh.on_speed && fr.can_dlc >= 4) {
                     uint32_t raw = parse_be32(&fr.data[0]);
                     g_rxh.on_speed((float)raw / 100.0f);
-                    
                 }
                 break;
             
-            case CANID_AI_LANE: // 0x80 (Uint8)
+            case CANID_AI_LANE:
                 if (g_rxh.on_ai_lane && fr.can_dlc >= 1)
                     g_rxh.on_ai_lane(fr.data[0]);
                 break;
 
-            case CANID_HEADING: // 0x84 (Uint16 BE)
+            case CANID_HEADING:
                 if (g_rxh.on_heading && fr.can_dlc >= 2)
                     g_rxh.on_heading(parse_be16(&fr.data[0]));
                 break;
@@ -126,26 +123,76 @@ static void* rx_thread(void* arg) {
 }
 
 // =========================================================
-// [Tx Functions] 패킷 구조(Timestamp, CRC) 준수
+// [Tx Functions] 
 // =========================================================
-static int send_frame(uint16_t id, const uint8_t* payload, uint8_t dlc) {
+
+// 공통 전송 로직 (Internal)
+static int send_raw_frame(struct can_frame* fr) {
     if (g_can_fd < 0) return -1;
+
+    // MSG_DONTWAIT: 버퍼 꽉 찼을 때 스레드 멈춤 방지
+    int ret = send(g_can_fd, fr, sizeof(struct can_frame), MSG_DONTWAIT);
+    
+    if (ret < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            // 버퍼가 꽉 참 -> 패킷 드랍
+            return 0; 
+        }
+        perror("[CAN TX] Error");
+        return -1;
+    }
+    return ret;
+}
+
+// 기존 일반 메시지 전송용 (Data 0~3 페이로드, 4~5 타임스탬프)
+static int send_frame(uint16_t id, const uint8_t* payload, uint8_t dlc) {
     struct can_frame fr;
     memset(&fr, 0, sizeof(fr));
     fr.can_id = id;
-    fr.can_dlc = 8; // 항상 8바이트 (프로토콜 준수)
+    fr.can_dlc = 8;
 
-    // Payload 복사 (최대 4바이트)
     if (dlc > 4) dlc = 4; 
     memcpy(fr.data, payload, dlc);
+    write_be16(&fr.data[4], get_timestamp_u16());
+    fr.data[7] = 0x00; // 일반 메시지는 보안 필드 없음
 
-    // [4][5] Timestamp (Big Endian)
+    return send_raw_frame(&fr);
+}
+
+// [신규] 프리텐셔너 전송 (보안 적용: Timestamp + Counter + MAC)
+int CANIF_send_pretension(uint8_t cmd) {
+    struct can_frame fr;
+    memset(&fr, 0, sizeof(fr));
+    
+    fr.can_id = CANID_PRETENSION;
+    fr.can_dlc = 8;
+
+    // 1. Data[0]: 명령어 (0x00: OFF, 0xFF: ON)
+    fr.data[0] = cmd;
+    // Data[1]~[3]은 0x00 (Reserved)
+
+    // 2. Data[4]~[5]: 타임스탬프 (Big Endian)
     write_be16(&fr.data[4], get_timestamp_u16());
 
-    // [7] CRC (여기서는 Dummy 0x00, 필요시 계산 로직 추가)
-    fr.data[7] = 0x00;
+    // 3. Data[6]: 카운터
+    fr.data[6] = g_pt_tx_counter;
 
-    return write(g_can_fd, &fr, sizeof(fr));
+    // 4. Data[7]: MAC 계산
+    // (Data[0]~Data[6]까지 7바이트 내용을 바탕으로 계산)
+    fr.data[7] = compute_mac(fr.data, 7, g_pt_tx_counter);
+
+    // 5. 전송
+    int ret = send_raw_frame(&fr);
+
+    if (ret > 0) {
+        // 전송 성공 시에만 카운터 증가 (0~255 순환)
+        g_pt_tx_counter++;
+        
+        // 디버깅용 로그 (필요시 주석 해제)
+        // printf("[PT-TX] CMD:0x%02X, Cnt:%d, MAC:0x%02X\n", cmd, fr.data[6], fr.data[7]);
+    }
+
+    return ret;
 }
 
 int CANIF_send_motor_cmd(const canif_motor_cmd_t* cmd) {
@@ -159,7 +206,6 @@ int CANIF_send_motor_cmd(const canif_motor_cmd_t* cmd) {
 
 int CANIF_send_aeb(uint8_t active) {
     uint8_t data[1];
-    // 활성: 0xFF(1111_1111), 비활성: 0x0F(0000_1111) - 표 기준
     data[0] = active ? 0xFF : 0x0F; 
     return send_frame(CANID_AEB_CTRL, data, 1);
 }
