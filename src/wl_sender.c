@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <endian.h>
 #include "wl_sender.h" 
 
 // =========================================================
@@ -11,7 +12,6 @@
 
 // [핵심 1] 전송 함수를 저장할 변수 선언 (이게 없어서 에러남)
 static wl_send_fn g_send_fn = NULL;
-
 static uint64_t g_acc_id_counter = 0; // 사고 ID 발급용
 
 // ---------------- time utils ----------------
@@ -56,14 +56,19 @@ void WL_send_accident(uint8_t severity) {
     // Header (Type 3)
     pkt.header.type = 3;
     pkt.header.reserved = 0; // 초기화 명시
-    pkt.header.timestamp = (uint16_t)(get_uptime_ms() & 0xFFFF);
+    // pkt.header.timestamp = (uint16_t)(get_uptime_ms() & 0xFFFF);
+    pkt.header.timestamp = htobe16((uint16_t)(get_uptime_ms() & 0xFFFF));
 
     // Payload
-    pkt.payload.direction = s.heading_deg;
+    // pkt.payload.direction = s.heading_deg;
+    pkt.payload.direction = htobe16(s.heading_deg);
     pkt.payload.lane = (uint8_t)s.lane;
     pkt.payload.severity = severity;
-    pkt.payload.accident_id = ++g_acc_id_counter; // ID 증가
-    pkt.payload.accident_time = get_unix_time();  // 현재 시각
+
+    // pkt.payload.accident_id = ++g_acc_id_counter; // ID 증가
+    // pkt.payload.accident_time = get_unix_time();  // 현재 시각
+    pkt.payload.accident_id = htobe64(++g_acc_id_counter);
+    pkt.payload.accident_time = htobe64(get_unix_time());
 
     // 3. 저장해둔 함수 포인터로 쏘기 (UARTIF_write_raw 직접 호출 X)
     g_send_fn((const uint8_t*)&pkt, sizeof(pkt));
@@ -92,12 +97,14 @@ void WL_send_direction(void) {
     // Header 설정 (Flattened structure)
     pkt.type = 4;
     pkt.reserved_pad = 0;
-    pkt.timestamp = (uint16_t)(get_uptime_ms() & 0xFFFF);
+    pkt.timestamp = htobe16((uint16_t)(get_uptime_ms() & 0xFFFF));
 
-    // Payload 설정 (Bit-field)
-    // reserved : 7비트 -> 이미 memset으로 0 초기화됨
-    // direction : 9비트 -> 값 대입 (자동으로 비트 위치에 맞게 들어감)
-    pkt.direction = s.heading_deg; 
+    // [핵심] 비트 필드 사용
+    pkt.payload.bits.reserved = 0;
+    pkt.payload.bits.direction = s.heading_deg; // 0~360 값이 9비트에 쏙 들어감
+
+    // 엔디안 변환 (호스트 -> 빅엔디안)
+    pkt.payload.raw = htobe16(pkt.payload.raw);
 
     // ETX 설정
     pkt.etx = 0xFE;

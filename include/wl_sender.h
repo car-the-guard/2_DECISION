@@ -37,24 +37,46 @@ typedef struct __attribute__((packed)) {
     uint16_t direction;     // 지자기 방향
 } wl4_payload_t;
 
-// WL-4 전체 패킷 (8 Byte)
-typedef struct __attribute__((packed)) {
-    // uint32_t raw; // (주석: 비트 연산을 위해 32비트 통으로 관리 가능)
-    uint8_t  stx;           // 0xFD 고정 (Start of Text)
+// // WL-4 전체 패킷 (8 Byte)
+// typedef struct __attribute__((packed)) {
+//     // uint32_t raw; // (주석: 비트 연산을 위해 32비트 통으로 관리 가능)
+//     uint8_t  stx;           // 0xFD 고정 (Start of Text)
     
-    // --- Header (4 Bytes) ---
-    uint8_t  type;          // WL-X 번호 (WL-4 = 4)
-    uint8_t  reserved_pad;  // 바이트 패딩 (0x00)
-    uint16_t timestamp;     // 시간 측정용 타임스탬프 (ms)
+//     // --- Header (4 Bytes) ---
+//     uint8_t  type;          // WL-X 번호 (WL-4 = 4)
+//     uint8_t  reserved_pad;  // 바이트 패딩 (0x00)
+//     uint16_t timestamp;     // 시간 측정용 타임스탬프 (ms)
 
-    // --- Payload (2 Bytes) ---
-    // Little Endian 기준: 먼저 선언된 필드가 하위 비트(LSB) 점유
-    // [비트 0~6] 하위 7비트 (Reserved)
-    uint16_t reserved  : 7; 
-    // [비트 7~15] 상위 9비트 (Direction)
-    uint16_t direction : 9; 
+//     // --- Payload (2 Bytes) ---
+//     // Little Endian 기준: 먼저 선언된 필드가 하위 비트(LSB) 점유
+//     // [비트 0~6] 하위 7비트 (Reserved)
+//     uint16_t reserved  : 7; 
+//     // [비트 7~15] 상위 9비트 (Direction)
+//     uint16_t direction : 9; 
 
-    uint8_t  etx;           // 0xFE 고정 (End of Text)
+//     uint8_t  etx;           // 0xFE 고정 (End of Text)
+// } wl4_packet_t;
+
+// [수정] WL-4 패킷 (Union 적용)
+typedef struct __attribute__((packed)) {
+    uint8_t  stx;           // 0xFD
+    uint8_t  type;          // 4
+    uint8_t  reserved_pad;  // 0x00
+    uint16_t timestamp;     // 2 Bytes
+    
+    // [핵심] Union을 사용하여 비트 필드와 Raw 값을 동시에 접근
+    union {
+        // 1. 편하게 값 넣기용 (비트 필드)
+        struct {
+            uint16_t reserved  : 7; // [LSB] 하위 7비트
+            uint16_t direction : 9; // [MSB] 상위 9비트
+        } bits;
+        
+        // 2. 엔디안 변환 및 전송용 (16비트 통짜)
+        uint16_t raw; 
+    } payload;
+
+    uint8_t  etx;           // 0xFE
 } wl4_packet_t;
 
 // =========================================================
