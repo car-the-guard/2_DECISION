@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <termios.h>
 #include <errno.h>
+#include <pthread.h>
 #include "uart.h"
 
 // =========================================================

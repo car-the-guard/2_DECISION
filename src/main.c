@@ -166,7 +166,7 @@ int main(int argc, char** argv) {
 
     // WL 송수신용 포트 사용
     uartif_config_t wl_cfg = { .dev_path = "/dev/ttyAMA2", .baudrate = 9600 };
-    f (UARTIF_init(&wl_cfg, on_wireless_data) != 0) {
+    if (UARTIF_init(&wl_cfg, on_wireless_data) != 0) {
         fprintf(stderr, "Wireless Board Init Failed\n");
         return -1;
     }
@@ -182,7 +182,7 @@ int main(int argc, char** argv) {
     CRESP_init(NULL, &cresp_cb);
 
     // [중요 수정] UARTIF를 껐으므로 WL 모듈도 NULL로 초기화 (에러 방지)
-    WL_init(NULL); 
+    WL_init(UARTIF_write_raw); 
 
     CANIF_start();
     BT_start();
@@ -198,11 +198,11 @@ int main(int argc, char** argv) {
 
         if (loop_count % 500 == 0) WL_send_direction(); // (NULL이라 아무 일도 안 함)
 
-        if (loop_count % 10 == 0) {
+        if (loop_count % 5 == 0) {
             dim_snapshot_t s;
             DIM_get_snapshot(&s);
 
-            printf("[DASH] SPD: %4.1f m/s | ACC: %5.2f m/s2 | SONAR: %5.1f cm | TTC: %5.2f s | HDG: %3d deg\n", 
+            printf("[DASH] SPD: %4.1f m/s | ACC: %5.2f m/s2 | SONAR: %5.1f cm | TTC: %5.1fs | HEADING: %3d deg\n", 
                    s.cur_speed_mps,    // 엔코더 속도
                    s.cur_accel_mps2,   // 가속도
                    s.ultra_dist_cm,    // 초음파 거리
