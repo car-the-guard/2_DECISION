@@ -35,6 +35,25 @@ static void sig_handler(int sig) {
     g_running = 0;
 }
 
+void on_wireless_data(const uint8_t* data, uint32_t len) {
+    if (len < 4) return; // 헤더보다 작으면 무시
+
+    uint8_t type = data[0]; // 첫 바이트가 Type
+
+    // WL-2 (외부 사고 정보) 수신!
+    if (type == 2) { 
+        uint8_t severity = data[4]; // Payload 첫 바이트가 위험도라고 가정
+        
+        printf("[WL] External Accident Received! Level: %d\n", severity);
+        
+        // [대응 로직] 외부 사고 발생 시 -> 감속 or 경고
+        if (severity >= 2) {
+             // 예: CRM 모듈에게 "외부 위험상황" 알리기
+             // CRM_notify_external_risk(severity); (이런 함수를 만들어서 호출)
+        }
+    }
+}
+
 // =========================================================
 // [Bluetooth Callbacks] 수신 즉시 1발 발사! (One-Shot)
 // =========================================================
@@ -121,33 +140,6 @@ static void cb_crm_set_aeb_cmd(int enable) {
 static void cb_crm_notify_accident(int severity) { WL_send_accident((uint8_t)severity); }
 static void cb_cresp_notify_accident(int severity) { WL_send_accident((uint8_t)severity); }
 
-// AI UART 수신 (그대로 유지)
-static void* ai_rx_thread(void* arg) {
-    const char* dev = (const char*)arg;
-    int fd = open(dev, O_RDWR | O_NOCTTY);
-    if (fd < 0) return NULL;
-    
-    struct termios tty;
-    tcgetattr(fd, &tty);
-    cfsetospeed(&tty, B9600);
-    cfsetispeed(&tty, B9600);
-    tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8 | CLOCAL | CREAD;
-    tty.c_iflag = 0; tty.c_oflag = 0; tty.c_lflag = 0;
-    tty.c_cc[VMIN] = 1; tty.c_cc[VTIME] = 1;
-    tcsetattr(fd, TCSANOW, &tty);
-
-    uint8_t buf[64];
-    while (g_running) {
-        int n = read(fd, buf, sizeof(buf));
-        if (n > 0 && buf[0] == 0xA1 && n >= 2) {
-            if (buf[1] >= 1 && buf[1] <= 3) DIM_update_lane((dim_lane_t)buf[1]);
-        }
-        usleep(10000);
-    }
-    close(fd);
-    return NULL;
-}
-
 // =========================================================
 // [MAIN]
 // =========================================================
@@ -172,9 +164,12 @@ int main(int argc, char** argv) {
     canif_config_t can_cfg = { .ifname = "can0" };
     if (CANIF_init(&can_cfg, &can_cbs) != 0) return -1;
 
-    // [중요 수정] 디버그 포트(ttyAMA0) 충돌 방지를 위해 무선 송신 비활성화
-    // uartif_config_t uart_cfg = { .dev_path = "/dev/ttyAMA0", .baudrate = 9600 };
-    // if (UARTIF_init(&uart_cfg) != 0) return -1;
+    // WL 송수신용 포트 사용
+    uartif_config_t wl_cfg = { .dev_path = "/dev/ttyAMA2", .baudrate = 9600 };
+    f (UARTIF_init(&wl_cfg, on_wireless_data) != 0) {
+        fprintf(stderr, "Wireless Board Init Failed\n");
+        return -1;
+    }
 
     // 블루투스 (ttyAMA1)는 정상 작동
     bt_config_t bt_cfg = { .uart_dev = "/dev/ttyAMA1", .baud = 9600 };
@@ -192,9 +187,6 @@ int main(int argc, char** argv) {
     CANIF_start();
     BT_start();
     CRESP_start();
-
-    pthread_t ai_thr;
-    pthread_create(&ai_thr, NULL, ai_rx_thread, (void*)"/dev/ttyAMA2");
 
     // printf("=== System Started. Loop Running. ===\n");
 
@@ -262,6 +254,5 @@ int main(int argc, char** argv) {
     // UARTIF_stop(); // 주석 처리됨
     CANIF_stop();
     DIM_deinit();
-    pthread_join(ai_thr, NULL);
     return 0;
 }

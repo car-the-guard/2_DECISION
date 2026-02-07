@@ -4,7 +4,6 @@
 #include <string.h>
 #include <time.h>
 #include "wl_sender.h" 
-// #include "uart.h"  <-- 삭제! (직접 호출하지 않고 함수 포인터 사용)
 
 // =========================================================
 // [Internal State] 전역 변수
@@ -83,21 +82,29 @@ void WL_send_direction(void) {
     dim_snapshot_t s;
     if (DIM_get_snapshot(&s) != 0) return;
 
-    // 2. 패킷 생성
+    // 2. 패킷 생성 (신규 구조체 적용)
     wl4_packet_t pkt;
-    memset(&pkt, 0, sizeof(pkt));
+    memset(&pkt, 0, sizeof(pkt)); // 0으로 초기화 (reserved 필드 등)
 
-    // Header (Type 4)
-    pkt.header.type = 4;
-    pkt.header.reserved = 0;
-    pkt.header.timestamp = (uint16_t)(get_uptime_ms() & 0xFFFF);
+    // STX 설정
+    pkt.stx = 0xFD;
 
-    // Payload
-    pkt.payload.direction = s.heading_deg;
+    // Header 설정 (Flattened structure)
+    pkt.type = 4;
+    pkt.reserved_pad = 0;
+    pkt.timestamp = (uint16_t)(get_uptime_ms() & 0xFFFF);
 
-    // 3. 저장해둔 함수 포인터로 쏘기
+    // Payload 설정 (Bit-field)
+    // reserved : 7비트 -> 이미 memset으로 0 초기화됨
+    // direction : 9비트 -> 값 대입 (자동으로 비트 위치에 맞게 들어감)
+    pkt.direction = s.heading_deg; 
+
+    // ETX 설정
+    pkt.etx = 0xFE;
+
+    // 3. 전송 (총 8바이트)
     g_send_fn((const uint8_t*)&pkt, sizeof(pkt));
 
-    // 디버깅 너무 많으면 주석 처리
-    // printf("[WL] Sent WL-4 (Dir) Deg:%d\n", s.heading_deg);
+    // 디버깅 (필요 시 주석 해제)
+    // printf("[WL] Sent WL-4 (Dir) Deg:%d, Size:%lu\n", s.heading_deg, sizeof(pkt));
 }

@@ -19,7 +19,7 @@ typedef struct {
 
 // 초기화 (UART 포트 열기 및 설정)
 // 성공 시 0, 실패 시 -1
-int UARTIF_init(const uartif_config_t* cfg);
+int UARTIF_init(const uartif_config_t* cfg, void (*rx_callback)(const uint8_t*, uint32_t));
 
 // UART 포트 닫기
 void UARTIF_stop(void);
