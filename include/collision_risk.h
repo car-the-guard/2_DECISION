@@ -27,6 +27,8 @@ typedef struct {
     
     // 1:사고발생
     void (*notify_accident)(int level);
+
+    void (*set_pretensioner)(int active);
 } crm_callbacks_t;
 
 // =========================================================

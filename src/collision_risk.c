@@ -139,6 +139,15 @@ void CRM_run_step(void) {
             break;
     }
 
+    if (g_cb.set_pretensioner) {
+        // TTC가 유효하고(999 아님) 0.3초 이하이면 동작
+        if (ttc <= 0.3f) {
+            g_cb.set_pretensioner(1); // ON
+        } else {
+            g_cb.set_pretensioner(0); // OFF
+        }
+    }
+
     // 5. 결과 저장 (Dashboard가 볼 수 있게)
     DIM_set_decision(ttc, next_state);
     

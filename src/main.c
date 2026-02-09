@@ -137,6 +137,21 @@ static void cb_crm_set_aeb_cmd(int enable) {
     }
 }
 
+static void cb_crm_set_pretensioner(int active) {
+    static int last_pt_state = -1; // 초기값 -1로 설정하여 최초 1회 무조건 전송
+
+    // 상태가 변경되었을 때만 CAN 메시지 전송 (버스 부하 방지)
+    if (active != last_pt_state) {
+        uint8_t cmd = active ? PT_CMD_ON : PT_CMD_OFF; // can.h에 정의된 매크로 사용 (0xFF / 0x00)
+        CANIF_send_pretension(cmd);
+        
+        if (active) printf("[Main] Safety Belt Pretensioner ACTIVATED! (TTC <= 0.3s)\n");
+        else        printf("[Main] Safety Belt Pretensioner OFF.\n");
+
+        last_pt_state = active;
+    }
+}
+
 static void cb_crm_notify_accident(int severity) { WL_send_accident((uint8_t)severity); }
 static void cb_cresp_notify_accident(int severity) { WL_send_accident((uint8_t)severity); }
 
@@ -175,7 +190,11 @@ int main(int argc, char** argv) {
     bt_config_t bt_cfg = { .uart_dev = "/dev/ttyAMA1", .baud = 9600 };
     if (BT_init(&bt_cfg, on_bt_cmd) != 0) fprintf(stderr, "BT Init Failed\n");
 
-    crm_callbacks_t crm_cb = { .set_brake_lamp = cb_crm_set_brake_lamp, .set_aeb_cmd = cb_crm_set_aeb_cmd, .notify_accident = cb_crm_notify_accident };
+    crm_callbacks_t crm_cb = { .set_brake_lamp = cb_crm_set_brake_lamp,
+        .set_aeb_cmd = cb_crm_set_aeb_cmd,
+        .notify_accident = cb_crm_notify_accident,
+        .set_pretensioner = cb_crm_set_pretensioner};
+
     CRM_init(NULL, &crm_cb);
 
     cresp_callbacks_t cresp_cb = { .set_brake_lamp = cb_crm_set_brake_lamp, .notify_accident = cb_cresp_notify_accident };

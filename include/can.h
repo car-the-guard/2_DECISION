@@ -13,14 +13,14 @@ extern "C" {
 // =========================================================
 #define CANID_COLLISION   0x08  // 충돌 감지 (RX)
 #define CANID_PRETENSION  0x09  // 프리텐셔너 (TX)
+#define CANID_AEB_CTRL    0x10  // AEB 제어 (TX)
 #define CANID_MOTOR_CMD   0x12  // 모터 제어 (TX)
-#define CANID_AEB_CTRL    0x15  // AEB 제어 (TX)
-#define CANID_BRAKE_LIGHT 0x16  // 브레이크등 제어 (TX)
 #define CANID_ULTRASONIC  0x24  // 초음파 센서 (RX)
 #define CANID_ACCEL_FB    0x28  // 가속도 피드백 (RX)
-#define CANID_REL_SPEED   0x2C  // 상대 속도 (RX)
+#define CANID_REL_SPEED   0x2C  // 전방 상대속도 (RX)
 #define CANID_AI_OBJ      0x30  // AI 객체 인식 (RX)
 #define CANID_SPEED_FB    0x38  // 현재 속도 (RX)
+#define CANID_BRAKE_LIGHT 0x48  // 브레이크등 제어 (TX)
 #define CANID_AI_LANE     0x80  // AI 차선 인식 (RX)
 #define CANID_HEADING     0x84  // 지자기(방향) (RX)
 
