@@ -102,12 +102,21 @@ void CRM_run_step(void) {
     
     // 3. 상태 결정 (FSM Lite)
     dim_decision_state_t next_state = DIM_STATE_NORMAL;
+    int allow_aeb = (s.obj_type != DIM_OBJ_CONE);
+    int force_critical = (s.obj_type == DIM_OBJ_OBSTACLE || s.obj_type == DIM_OBJ_PERSON);
 
     // 저속 주행 중이거나, 후진 중이면 AEB 무시 (노이즈 방지)
     if (s.cur_speed_mps < g_cfg.min_activ_speed_mps) {
         next_state = DIM_STATE_NORMAL;
     }
-    else if (ttc <= g_cfg.ttc_aeb_sec) {
+    // else if (ttc <= g_cfg.ttc_aeb_sec) {
+    //     next_state = DIM_STATE_CRITICAL; // AEB !
+    // }
+
+    else if (force_critical) {
+        next_state = DIM_STATE_CRITICAL;
+    }
+    else if (allow_aeb && ttc <= g_cfg.ttc_aeb_sec) {
         next_state = DIM_STATE_CRITICAL; // AEB !
     }
     else if (ttc <= g_cfg.ttc_warn_sec) {
@@ -141,7 +150,7 @@ void CRM_run_step(void) {
 
     if (g_cb.set_pretensioner) {
         // TTC가 유효하고(999 아님) 0.3초 이하이면 동작
-        if (ttc <= 0.3f) {
+        if (allow_aeb && (force_critical || ttc <= 0.3f)) {
             g_cb.set_pretensioner(1); // ON
         } else {
             g_cb.set_pretensioner(0); // OFF

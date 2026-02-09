@@ -101,6 +101,8 @@ static void cb_can_speed(float speed_mps) { DIM_update_speed(speed_mps); }
 static void cb_can_accel(float accel_mps2) { DIM_update_accel(accel_mps2); }
 static void cb_can_rel_speed(float rel_mps) { DIM_update_rel_speed(rel_mps); }
 static void cb_can_heading(uint16_t deg) { DIM_update_heading(deg); CRESP_update_heading(deg); }
+static void cb_can_ai_lane(uint8_t lane) { DIM_update_lane((dim_lane_t)lane); }
+static void cb_can_ai_obj(uint8_t obj_type) { DIM_update_obj_type((dim_obj_type_t)obj_type); }
 static void cb_can_collision_detected(uint8_t is_crash) {
     (void)is_crash;
     printf("[Main] !!! PHYSICAL IMPACT DETECTED !!!\n");
@@ -172,8 +174,10 @@ int main(int argc, char** argv) {
         .on_speed = cb_can_speed,
         .on_accel = cb_can_accel,
         .on_rel_speed = cb_can_rel_speed,
+        .on_ai_obj = cb_can_ai_obj,
         .on_heading = cb_can_heading,
-        .on_collision = cb_can_collision_detected
+        .on_collision = cb_can_collision_detected,
+        .on_ai_lane = cb_can_ai_lane
     };
     
     canif_config_t can_cfg = { .ifname = "can0" };

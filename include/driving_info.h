@@ -57,6 +57,7 @@ void DIM_update_rel_speed(float mps);
 void DIM_update_ultra(float cm);
 void DIM_update_heading(uint16_t deg);
 void DIM_update_lane(dim_lane_t lane);
+void DIM_update_obj_type(dim_obj_type_t obj_type);
 
 // 기존 함수
 void DIM_set_decision(float ttc, dim_decision_state_t state);

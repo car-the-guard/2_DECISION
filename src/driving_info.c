@@ -64,6 +64,12 @@ void DIM_update_lane(dim_lane_t lane) {
     pthread_rwlock_unlock(&g_rw);
 }
 
+void DIM_update_obj_type(dim_obj_type_t obj_type) {
+    pthread_rwlock_wrlock(&g_rw);
+    g_s.obj_type = obj_type;
+    pthread_rwlock_unlock(&g_rw);
+}
+
 void DIM_set_decision(float ttc, dim_decision_state_t state) {
     pthread_rwlock_wrlock(&g_rw);
     g_s.calc_ttc_sec = ttc;
