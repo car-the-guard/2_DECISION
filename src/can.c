@@ -34,15 +34,20 @@ static uint16_t get_timestamp_u16() {
 
 // [유틸] Big Endian 파싱 헬퍼
 static uint16_t parse_be16(const uint8_t* d) {
-    return (uint16_t)((d[0] << 8) | d[1]);
+    uint16_t val;
+    memcpy(&val, d, sizeof(uint16_t));
+    return be16toh(val);
 }
+
 static uint32_t parse_be32(const uint8_t* d) {
-    return (uint32_t)((d[0] << 24) | (d[1] << 16) | (d[2] << 8) | d[3]);
+    uint32_t val;
+    memcpy(&val, d, sizeof(uint32_t));
+    return be32toh(val);
 }
 // [유틸] Big Endian 쓰기 헬퍼 (Tx용)
 static void write_be16(uint8_t* d, uint16_t v) {
-    d[0] = (uint8_t)((v >> 8) & 0xFF);
-    d[1] = (uint8_t)(v & 0xFF);
+    uint16_t be_v = htobe16(v);
+    memcpy(d, &be_v, sizeof(uint16_t));
 }
 
 static int open_can_socket(const char *ifname) {

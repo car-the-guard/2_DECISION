@@ -1,6 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include "driving_info.h" // 데이터 참조용
+#include <assert.h> // _Static_assert 사용
 
 #ifdef __cplusplus
 extern "C" {
@@ -27,57 +28,68 @@ typedef struct __attribute__((packed)) {
 } wl3_payload_t;
 
 // WL-3 전체 패킷 (24 Byte)
+// typedef struct __attribute__((packed)) {
+//     wl_header_t header;
+//     wl3_payload_t payload;
+// } wl3_packet_t;
+
 typedef struct __attribute__((packed)) {
-    wl_header_t header;
-    wl3_payload_t payload;
+    uint8_t  stx;             // [0] 0xFD (Start)
+    uint8_t  type;            // [1] 0x03 (WL-3)
+    uint8_t  reserved_pad;    // [2] 0x00
+    uint16_t timestamp;       // [3-4] ms
+    
+    // Payload (20 Bytes)
+    uint16_t direction;       // [5-6] 0~359
+    uint8_t  lane;            // [7] 차선
+    uint8_t  severity;        // [8] 위험도
+    uint64_t accident_id;     // [9-16] 사고 ID
+    uint64_t accident_time;   // [17-24] 사고 시간
+    
+    uint8_t  etx;             // [25] 0xFE (End)
 } wl3_packet_t;
+
+_Static_assert(sizeof(wl3_packet_t) == 26, "WL3 Packet Size Mismatch! Must be 26 bytes.");
 
 // WL-4 Payload (2 Byte)
 typedef struct __attribute__((packed)) {
     uint16_t direction;     // 지자기 방향
 } wl4_payload_t;
 
-// // WL-4 전체 패킷 (8 Byte)
-// typedef struct __attribute__((packed)) {
-//     // uint32_t raw; // (주석: 비트 연산을 위해 32비트 통으로 관리 가능)
-//     uint8_t  stx;           // 0xFD 고정 (Start of Text)
-    
-//     // --- Header (4 Bytes) ---
-//     uint8_t  type;          // WL-X 번호 (WL-4 = 4)
-//     uint8_t  reserved_pad;  // 바이트 패딩 (0x00)
-//     uint16_t timestamp;     // 시간 측정용 타임스탬프 (ms)
-
-//     // --- Payload (2 Bytes) ---
-//     // Little Endian 기준: 먼저 선언된 필드가 하위 비트(LSB) 점유
-//     // [비트 0~6] 하위 7비트 (Reserved)
-//     uint16_t reserved  : 7; 
-//     // [비트 7~15] 상위 9비트 (Direction)
-//     uint16_t direction : 9; 
-
-//     uint8_t  etx;           // 0xFE 고정 (End of Text)
-// } wl4_packet_t;
 
 // [수정] WL-4 패킷 (Union 적용)
-typedef struct __attribute__((packed)) {
-    uint8_t  stx;           // 0xFD
-    uint8_t  type;          // 4
-    uint8_t  reserved_pad;  // 0x00
-    uint16_t timestamp;     // 2 Bytes
+// typedef struct __attribute__((packed)) {
+//     uint8_t  stx;           // 0xFD
+//     uint8_t  type;          // 4
+//     uint8_t  reserved_pad;  // 0x00
+//     uint16_t timestamp;     // 2 Bytes
     
-    // [핵심] Union을 사용하여 비트 필드와 Raw 값을 동시에 접근
-    union {
-        // 1. 편하게 값 넣기용 (비트 필드)
-        struct {
-            uint16_t reserved  : 7; // [LSB] 하위 7비트
-            uint16_t direction : 9; // [MSB] 상위 9비트
-        } bits;
+//     // [핵심] Union을 사용하여 비트 필드와 Raw 값을 동시에 접근
+//     union {
+//         // 1. 편하게 값 넣기용 (비트 필드)
+//         struct {
+//             uint16_t reserved  : 7; // [LSB] 하위 7비트
+//             uint16_t direction : 9; // [MSB] 상위 9비트
+//         } bits;
         
-        // 2. 엔디안 변환 및 전송용 (16비트 통짜)
-        uint16_t raw; 
-    } payload;
+//         // 2. 엔디안 변환 및 전송용 (16비트 통짜)
+//         uint16_t raw; 
+//     } payload;
 
-    uint8_t  etx;           // 0xFE
+//     uint8_t  etx;           // 0xFE
+// } wl4_packet_t;
+typedef struct __attribute__((packed)) {
+    uint8_t  stx;             // [0] 0xFD
+    uint8_t  type;            // [1] 0x04
+    uint8_t  reserved_pad;    // [2] 0x00
+    uint16_t timestamp;       // [3-4] ms
+    
+    uint16_t direction;       // [5-6] 0~359
+
+    uint8_t  etx;             // [7] 0xFE
 } wl4_packet_t;
+
+_Static_assert(sizeof(wl4_packet_t) == 8, "WL4 Packet Size Mismatch! Must be 8 bytes.");
 
 // =========================================================
 // [Functions]
