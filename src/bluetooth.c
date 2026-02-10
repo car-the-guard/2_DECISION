@@ -16,6 +16,7 @@ static bt_on_cmd_fn g_cb = NULL;
 static pthread_t g_thr;
 static volatile int g_running = 0;
 static int g_fd = -1;
+static int g_thread_started = 0;
 
 // Baudrate 변환
 static speed_t baud_to_speed(int baud) {
@@ -128,6 +129,7 @@ int BT_start(void) {
         g_running = 0;
         return -1;
     }
+    g_thread_started = 1;
     return 0;
 }
 
@@ -141,5 +143,8 @@ void BT_stop(void) {
         close(g_fd); // 파일 디스크립터를 닫으면 read가 에러를 뱉고 깨어남
         g_fd = -1;
     }
-    pthread_join(g_thr, NULL);
+    if (g_thread_started) {
+        pthread_join(g_thr, NULL);
+        g_thread_started = 0;
+    }
 }

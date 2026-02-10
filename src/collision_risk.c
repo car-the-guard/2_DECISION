@@ -1,7 +1,8 @@
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <math.h>
-#include <stdlib.h> // abs
+#include <stdlib.h>
+#include <time.h>
 #include "collision_risk.h"
 
 // =========================================================
@@ -20,6 +21,12 @@ static const crm_config_t default_cfg = {
     .ttc_aeb_sec  = 1.5f,  // 1.5초 이내면 급정거
     .min_activ_speed_mps = 0.5f 
 };
+
+static uint32_t now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint32_t)(ts.tv_sec * 1000u + ts.tv_nsec / 1000000u);
+}
 
 // =========================================================
 // [초기화]
@@ -102,26 +109,41 @@ void CRM_run_step(void) {
     
     // 3. 상태 결정 (FSM Lite)
     dim_decision_state_t next_state = DIM_STATE_NORMAL;
-    int allow_aeb = (s.obj_type != DIM_OBJ_CONE);
-    int force_critical = (s.obj_type == DIM_OBJ_OBSTACLE || s.obj_type == DIM_OBJ_PERSON);
+    uint32_t age_obj_ms = now_ms() - s.ts_obj_ms;
+    dim_obj_type_t effective_obj = (age_obj_ms > 300u) ? DIM_OBJ_NONE : s.obj_type;
+    int allow_aeb = (effective_obj != DIM_OBJ_CONE);
+    int force_critical = (effective_obj == DIM_OBJ_OBSTACLE || effective_obj == DIM_OBJ_PERSON);
+
+    
+    // int allow_aeb = (s.obj_type != DIM_OBJ_CONE);
+    // int force_critical = (s.obj_type == DIM_OBJ_OBSTACLE || s.obj_type == DIM_OBJ_PERSON);
 
     // 저속 주행 중이거나, 후진 중이면 AEB 무시 (노이즈 방지)
     if (s.cur_speed_mps < g_cfg.min_activ_speed_mps) {
         next_state = DIM_STATE_NORMAL;
     }
-    // else if (ttc <= g_cfg.ttc_aeb_sec) {
-    //     next_state = DIM_STATE_CRITICAL; // AEB !
-    // }
 
-    else if (force_critical) {
+     else if (force_critical && ttc <= g_cfg.ttc_warn_sec) {
         next_state = DIM_STATE_CRITICAL;
     }
+
     else if (allow_aeb && ttc <= g_cfg.ttc_aeb_sec) {
         next_state = DIM_STATE_CRITICAL; // AEB !
     }
+
     else if (ttc <= g_cfg.ttc_warn_sec) {
         next_state = DIM_STATE_WARNING;  // 경고
     }
+
+     // else if (ttc <= g_cfg.ttc_aeb_sec) {
+    //     next_state = DIM_STATE_CRITICAL; // AEB !
+    // }
+
+
+    // else if (force_critical) {
+    //     next_state = DIM_STATE_CRITICAL;
+    // }
+    
     else {
         next_state = DIM_STATE_NORMAL;
     }
@@ -150,7 +172,7 @@ void CRM_run_step(void) {
 
     if (g_cb.set_pretensioner) {
         // TTC가 유효하고(999 아님) 0.3초 이하이면 동작
-        if (allow_aeb && (force_critical || ttc <= 0.3f)) {
+        if (allow_aeb && ((force_critical && ttc <= g_cfg.ttc_warn_sec) || ttc <= 0.3f)){
             g_cb.set_pretensioner(1); // ON
         } else {
             g_cb.set_pretensioner(0); // OFF

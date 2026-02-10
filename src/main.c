@@ -24,6 +24,9 @@
 // =========================================================
 static volatile int g_running = 1;
 static int g_aeb_active = 0;
+static int g_brake_level_crm = 0;
+static int g_brake_level_cresp = 0;
+static pthread_mutex_t g_brake_lock = PTHREAD_MUTEX_INITIALIZER;
 
 // [메모장] 현재 운전자 명령 저장용 (전역 변수)
 static canif_motor_cmd_t g_current_cmd = {0, 0, 0, 0};
@@ -101,24 +104,55 @@ static void cb_can_speed(float speed_mps) { DIM_update_speed(speed_mps); }
 static void cb_can_accel(float accel_mps2) { DIM_update_accel(accel_mps2); }
 static void cb_can_rel_speed(float rel_mps) { DIM_update_rel_speed(rel_mps); }
 static void cb_can_heading(uint16_t deg) { DIM_update_heading(deg); CRESP_update_heading(deg); }
+// static void cb_can_ai_lane(uint8_t lane) { DIM_update_lane((dim_lane_t)lane); }
+// static void cb_can_ai_obj(uint8_t obj_type) { DIM_update_obj_type((dim_obj_type_t)obj_type); }
 static void cb_can_ai_lane(uint8_t lane) { DIM_update_lane((dim_lane_t)lane); }
 static void cb_can_ai_obj(uint8_t obj_type) { DIM_update_obj_type((dim_obj_type_t)obj_type); }
+
 static void cb_can_collision_detected(uint8_t is_crash) {
     (void)is_crash;
     printf("[Main] !!! PHYSICAL IMPACT DETECTED !!!\n");
     CRESP_trigger_impact(); 
 }
 
-static void cb_crm_set_brake_lamp(int level) {
+// static void cb_crm_set_brake_lamp(int level) {
+//     canif_brake_mode_t current_mode = BRAKE_OFF;
+//     if (level == 1) current_mode = BRAKE_ON;
+//     else if (level >= 2) current_mode = BRAKE_BLINK;
+
+//     static canif_brake_mode_t last_mode = BRAKE_OFF;
+//     if (current_mode != last_mode) {
+//         CANIF_send_brake_light(current_mode);
+//         last_mode = current_mode;
+//     }
+// }
+
+static void update_brake_lamp(void) {
+    int chosen_level = g_brake_level_cresp > 0 ? g_brake_level_cresp : g_brake_level_crm;
     canif_brake_mode_t current_mode = BRAKE_OFF;
-    if (level == 1) current_mode = BRAKE_ON;
-    else if (level >= 2) current_mode = BRAKE_BLINK;
+
+    if (chosen_level == 1) current_mode = BRAKE_ON;
+    else if (chosen_level >= 2) current_mode = BRAKE_BLINK;
 
     static canif_brake_mode_t last_mode = BRAKE_OFF;
     if (current_mode != last_mode) {
         CANIF_send_brake_light(current_mode);
         last_mode = current_mode;
     }
+}
+
+static void cb_crm_set_brake_lamp(int level) {
+    pthread_mutex_lock(&g_brake_lock);
+    g_brake_level_crm = level;
+    update_brake_lamp();
+    pthread_mutex_unlock(&g_brake_lock);
+}
+
+static void cb_cresp_set_brake_lamp(int level) {
+    pthread_mutex_lock(&g_brake_lock);
+    g_brake_level_cresp = level;
+    update_brake_lamp();
+    pthread_mutex_unlock(&g_brake_lock);
 }
 
 static void cb_crm_set_aeb_cmd(int enable) {
@@ -201,7 +235,8 @@ int main(int argc, char** argv) {
 
     CRM_init(NULL, &crm_cb);
 
-    cresp_callbacks_t cresp_cb = { .set_brake_lamp = cb_crm_set_brake_lamp, .notify_accident = cb_cresp_notify_accident };
+    // cresp_callbacks_t cresp_cb = { .set_brake_lamp = cb_crm_set_brake_lamp, .notify_accident = cb_cresp_notify_accident };
+    cresp_callbacks_t cresp_cb = { .set_brake_lamp = cb_cresp_set_brake_lamp, .notify_accident = cb_cresp_notify_accident };
     CRESP_init(NULL, &cresp_cb);
 
     // [중요 수정] UARTIF를 껐으므로 WL 모듈도 NULL로 초기화 (에러 방지)

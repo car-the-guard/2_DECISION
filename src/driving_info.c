@@ -18,6 +18,8 @@ int DIM_init(void) {
     memset(&g_s, 0, sizeof(g_s));
     g_s.calc_ttc_sec = 999.0f; 
     g_s.decision = DIM_STATE_NORMAL;
+    g_s.ts_lane_ms = now_ms();
+    g_s.ts_obj_ms = now_ms();
     pthread_rwlock_unlock(&g_rw);
     return 0;
 }
@@ -61,12 +63,14 @@ void DIM_update_heading(uint16_t deg) {
 void DIM_update_lane(dim_lane_t lane) {
     pthread_rwlock_wrlock(&g_rw);
     g_s.lane = lane;
+    g_s.ts_lane_ms = now_ms();
     pthread_rwlock_unlock(&g_rw);
 }
 
 void DIM_update_obj_type(dim_obj_type_t obj_type) {
     pthread_rwlock_wrlock(&g_rw);
     g_s.obj_type = obj_type;
+    g_s.ts_obj_ms = now_ms();
     pthread_rwlock_unlock(&g_rw);
 }
 

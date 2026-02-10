@@ -41,7 +41,9 @@ typedef struct {
     float calc_ttc_sec;             
     dim_decision_state_t decision;  
 
-    uint32_t ts_common_ms;   
+    uint32_t ts_common_ms;
+    uint32_t ts_lane_ms;
+    uint32_t ts_obj_ms;
 } dim_snapshot_t;
 
 // =========================================================

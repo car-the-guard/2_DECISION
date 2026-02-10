@@ -28,6 +28,12 @@ static uint32_t get_uptime_ms(void) {
     return (uint32_t)(ts.tv_sec * 1000u + ts.tv_nsec / 1000000u);
 }
 
+static uint32_t now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint32_t)(ts.tv_sec * 1000u + ts.tv_nsec / 1000000u);
+}
+
 static uint64_t get_unix_time(void) {
     return (uint64_t)time(NULL);
 }
@@ -69,7 +75,9 @@ void WL_send_accident(uint8_t severity) {
     uint16_t heading = norm_heading_deg((int)s.heading_deg);
     pkt.direction = htobe16(heading);
     
-    pkt.lane = (uint8_t)s.lane;       // 1 Byte는 변환 불필요
+    uint32_t age_lane_ms = now_ms() - s.ts_lane_ms;
+    dim_lane_t lane = (age_lane_ms > 500u) ? DIM_LANE_UNKNOWN : s.lane;
+    pkt.lane = (uint8_t)lane;       // 1 Byte는 변환 불필요
     pkt.severity = severity;          // 1 Byte는 변환 불필요
 
     // [Big Endian 변환] ID (8 Bytes), Time (8 Bytes)

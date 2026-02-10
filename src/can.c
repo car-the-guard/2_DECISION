@@ -16,10 +16,15 @@
 #include <linux/can/raw.h>
 #include <time.h>
 
+#define ACCEL_SCALE 1000.0f
+#define REL_SPEED_SCALE 100.0f
+#define SPEED_SCALE 100.0f
+
 static int g_can_fd = -1;
 static volatile int g_running = 0;
 static pthread_t g_rx_thr;
 static canif_rx_handlers_t g_rxh;
+static int g_rx_thread_started = 0;
 
 // [전역] 프리텐셔너 송신 카운터
 static uint8_t g_pt_tx_counter = 0;
@@ -90,14 +95,14 @@ static void* rx_thread(void* arg) {
             case CANID_ACCEL_FB:
                 if (g_rxh.on_accel && fr.can_dlc >= 4) {
                     uint32_t raw = parse_be32(&fr.data[0]);
-                    g_rxh.on_accel((float)raw / 1000.0f);
+                    g_rxh.on_accel((float)raw / ACCEL_SCALE);
                 }
                 break;
 
             case CANID_REL_SPEED:
                 if (g_rxh.on_rel_speed && fr.can_dlc >= 4) {
                     int32_t raw = (int32_t)parse_be32(&fr.data[0]);
-                    g_rxh.on_rel_speed((float)raw / 100.0f);
+                    g_rxh.on_rel_speed((float)raw / REL_SPEED_SCALE);
                 }
                 break;
 
@@ -109,7 +114,7 @@ static void* rx_thread(void* arg) {
             case CANID_SPEED_FB:
                 if (g_rxh.on_speed && fr.can_dlc >= 4) {
                     uint32_t raw = parse_be32(&fr.data[0]);
-                    g_rxh.on_speed((float)raw / 100.0f);
+                    g_rxh.on_speed((float)raw / SPEED_SCALE);
                 }
                 break;
             
@@ -231,11 +236,19 @@ int CANIF_start(void) {
     if (g_can_fd < 0) return -1;
     if (g_running) return 0;
     g_running = 1;
-    return pthread_create(&g_rx_thr, NULL, rx_thread, NULL);
+    if (pthread_create(&g_rx_thr, NULL, rx_thread, NULL) != 0) {
+        g_running = 0;
+        return -1;
+    }
+    g_rx_thread_started = 1;
+    return 0;
 }
 
 void CANIF_stop(void) {
     g_running = 0;
     if (g_can_fd >= 0) close(g_can_fd);
-    pthread_join(g_rx_thr, NULL);
+    if (g_rx_thread_started) {
+        pthread_join(g_rx_thr, NULL);
+        g_rx_thread_started = 0;
+    }
 }

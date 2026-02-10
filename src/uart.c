@@ -16,6 +16,7 @@ static int g_uart_fd = -1;
 static volatile int g_running = 0;
 static pthread_t g_rx_thr;
 static void (*g_rx_cb)(const uint8_t* data, uint32_t len) = NULL;
+static int g_thread_started = 0;
 
 // =========================================================
 // [API] 초기화
@@ -68,8 +69,10 @@ int UARTIF_init(const uartif_config_t* cfg, void (*rx_callback)(const uint8_t*, 
     g_rx_cb = rx_callback;
     g_running = 1;
     if (pthread_create(&g_rx_thr, NULL, uart_rx_thread, NULL) != 0) {
+        g_running = 0;
         return -1;
     }
+    g_thread_started = 1;
 
     printf("[UART] Wireless Board Connected on %s (Rx/Tx)\n", cfg->dev_path);
     return 0;
@@ -81,7 +84,10 @@ int UARTIF_init(const uartif_config_t* cfg, void (*rx_callback)(const uint8_t*, 
 void UARTIF_stop(void) {
     g_running = 0;
     if (g_uart_fd >= 0) close(g_uart_fd);
-    pthread_join(g_rx_thr, NULL);
+    if (g_thread_started) {
+        pthread_join(g_rx_thr, NULL);
+        g_thread_started = 0;
+    }
 }
 
 // =========================================================
