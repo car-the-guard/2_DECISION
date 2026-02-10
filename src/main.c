@@ -39,7 +39,7 @@ static void sig_handler(int sig) {
 }
 
 void on_wireless_data(const uint8_t* data, uint32_t len) {
-    if (len < 4) return; // 헤더보다 작으면 무시
+    if (len < 5) return; // 헤더보다 작으면 무시
 
     uint8_t type = data[0]; // 첫 바이트가 Type
 
@@ -69,6 +69,11 @@ static void on_bt_cmd(const char* cmd) {
     int parsed = sscanf(cmd, " %c%d %c%d", &move_dir, &speed_val, &steer_dir, &angle_val);
     if (parsed < 2) return;
     if (parsed < 4) { steer_dir = 'R'; angle_val = 0; }
+
+    if (speed_val < 0) speed_val = 0;
+    if (speed_val > 255) speed_val = 255;
+    if (angle_val < 0) angle_val = 0;
+    if (angle_val > 255) angle_val = 255;
 
     // 임시 구조체 생성
     canif_motor_cmd_t m = {0, 0, 0, 0};
