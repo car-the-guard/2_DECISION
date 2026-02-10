@@ -57,15 +57,39 @@ static void write_be16(uint8_t* d, uint16_t v) {
 
 static int open_can_socket(const char *ifname) {
     int s = socket(PF_CAN, SOCK_RAW, CAN_RAW);
-    if (s < 0) { perror("Socket"); return -1; }
+    // if (s < 0) { perror("Socket"); return -1; }
+
+    if (s < 0) {
+        perror("[CAN] socket");
+        return -1;
+    }
+
     struct ifreq ifr;
+    memset(&ifr, 0, sizeof(ifr));
     strncpy(ifr.ifr_name, ifname, IFNAMSIZ - 1);
-    ioctl(s, SIOCGIFINDEX, &ifr);
+
+    // ioctl(s, SIOCGIFINDEX, &ifr);
+    ifr.ifr_name[IFNAMSIZ - 1] = '\0';
+
+    if (ioctl(s, SIOCGIFINDEX, &ifr) < 0) {
+        perror("[CAN] ioctl(SIOCGIFINDEX)");
+        close(s);
+        return -1;
+    }
+
     struct sockaddr_can addr;
     memset(&addr, 0, sizeof(addr));
     addr.can_family = AF_CAN;
     addr.can_ifindex = ifr.ifr_ifindex;
-    if (bind(s, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(s); return -1; }
+
+    // if (bind(s, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(s); return -1; }
+
+    if (bind(s, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        perror("[CAN] bind");
+        close(s);
+        return -1;
+    }
+
     return s;
 }
 
@@ -246,7 +270,13 @@ int CANIF_start(void) {
 
 void CANIF_stop(void) {
     g_running = 0;
-    if (g_can_fd >= 0) close(g_can_fd);
+    // if (g_can_fd >= 0) close(g_can_fd);
+
+    if (g_can_fd >= 0) {
+        close(g_can_fd);
+        g_can_fd = -1;
+    }
+    
     if (g_rx_thread_started) {
         pthread_join(g_rx_thr, NULL);
         g_rx_thread_started = 0;

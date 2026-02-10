@@ -17,6 +17,7 @@ static pthread_t g_thr;
 static volatile int g_running = 0;
 static int g_fd = -1;
 static int g_thread_started = 0;
+static pthread_mutex_t g_fd_lock = PTHREAD_MUTEX_INITIALIZER;
 
 // Baudrate 변환
 static speed_t baud_to_speed(int baud) {
@@ -65,8 +66,15 @@ static int internal_bt_open(const char *dev, int baud) {
 // 수신 스레드
 static void* bt_rx_thread(void* arg) {
     (void)arg;
-    g_fd = internal_bt_open(g_cfg.uart_dev, g_cfg.baud);
-    if(g_fd < 0) {
+    // g_fd = internal_bt_open(g_cfg.uart_dev, g_cfg.baud);
+    // if(g_fd < 0) {
+
+    int fd = internal_bt_open(g_cfg.uart_dev, g_cfg.baud);
+    pthread_mutex_lock(&g_fd_lock);
+    g_fd = fd;
+    pthread_mutex_unlock(&g_fd_lock);
+
+    if(fd < 0) {
         fprintf(stderr, "[BT] Open failed: %s\n", g_cfg.uart_dev);
         return NULL;
     }
@@ -80,7 +88,8 @@ static void* bt_rx_thread(void* arg) {
         // [수정 5] poll 없이 바로 read 호출
         // Blocking 모드이므로 데이터가 없으면 여기서 스레드가 멈춰 있습니다. (CPU 사용률 0%)
         // 데이터가 1바이트라도 도착하면 리눅스 커널이 즉시 깨워줍니다. (인터럽트 방식)
-        int n = read(g_fd, tmp, sizeof(tmp));
+        // int n = read(g_fd, tmp, sizeof(tmp));
+        int n = read(fd, tmp, sizeof(tmp));
 
         if (n > 0) {
             // 읽은 데이터 처리
@@ -111,7 +120,13 @@ static void* bt_rx_thread(void* arg) {
         }
     }
 
-    if(g_fd >= 0) { close(g_fd); g_fd = -1; }
+    // if(g_fd >= 0) { close(g_fd); g_fd = -1; }
+    pthread_mutex_lock(&g_fd_lock);
+    if (g_fd == fd && g_fd >= 0) {
+        close(g_fd);
+        g_fd = -1;
+    }
+    pthread_mutex_unlock(&g_fd_lock);
     return NULL;
 }
 
@@ -136,13 +151,22 @@ int BT_start(void) {
 void BT_stop(void) {
     if (!g_running) return;
     g_running = 0;
-    // Blocking read 중일 수 있으므로 강제 종료 혹은 캔슬이 필요할 수 있으나
-    // 간단한 종료를 위해 스레드 detach 혹은 그냥 둡니다.
-    // 여기서는 pthread_cancel을 쓰거나, g_fd를 닫아서 read를 깨우는 방법을 씁니다.
-    if (g_fd >= 0) {
-        close(g_fd); // 파일 디스크립터를 닫으면 read가 에러를 뱉고 깨어남
-        g_fd = -1;
+
+
+    // if (g_fd >= 0) {
+    //     close(g_fd); // 파일 디스크립터를 닫으면 read가 에러를 뱉고 깨어남
+    //     g_fd = -1;
+    // }
+
+    pthread_mutex_lock(&g_fd_lock);
+    int fd = g_fd;
+    g_fd = -1;
+    pthread_mutex_unlock(&g_fd_lock);
+
+    if (fd >= 0) {
+        close(fd); // 파일 디스크립터를 닫으면 read가 에러를 뱉고 깨어남
     }
+
     if (g_thread_started) {
         pthread_join(g_thr, NULL);
         g_thread_started = 0;

@@ -14,6 +14,7 @@ static int g_inited = 0;
 
 // 이전 상태 (상태 변경 감지용)
 static dim_decision_state_t g_prev_state = DIM_STATE_NORMAL;
+static uint32_t g_last_acc_notify_ms = 0;
 
 // 기본 설정값 (설정 안 넘어올 시)
 static const crm_config_t default_cfg = {
@@ -162,13 +163,24 @@ void CRM_run_step(void) {
             printf("[CRM] WARNING! TTC: %.2f\n", ttc);
             break;
 
-        case DIM_STATE_CRITICAL:
+        case DIM_STATE_CRITICAL : {
             if (g_cb.set_aeb_cmd)    g_cb.set_aeb_cmd(1); // ★ 제어권 뺏기 (강제 정지)
             if (g_cb.set_brake_lamp) g_cb.set_brake_lamp(2); // 브레이크등 점등
-            if (g_cb.notify_accident) g_cb.notify_accident(1); // 필요 시 사고 알림
+            // if (g_cb.notify_accident) g_cb.notify_accident(1); // 필요 시 사고 알림
+
+            uint32_t now = now_ms();
+            int state_entered = (g_prev_state != DIM_STATE_CRITICAL);
+            int periodic_due = (now - g_last_acc_notify_ms >= 500u);
+            if (g_cb.notify_accident && (state_entered || periodic_due)) {
+                g_cb.notify_accident(1); // 필요 시 사고 알림 (진입 시 + 500ms 주기)
+                g_last_acc_notify_ms = now;
+            }
+
             printf("[CRM] !!!!! AEB ACTIVATED !!!!! TTC: %.2f\n", ttc);
             break;
+        }
     }
+    
 
     if (g_cb.set_pretensioner) {
         // TTC가 유효하고(999 아님) 0.3초 이하이면 동작
