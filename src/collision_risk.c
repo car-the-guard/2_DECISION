@@ -119,8 +119,15 @@ void CRM_run_step(void) {
     // int allow_aeb = (s.obj_type != DIM_OBJ_CONE);
     // int force_critical = (s.obj_type == DIM_OBJ_OBSTACLE || s.obj_type == DIM_OBJ_PERSON);
 
-    // 저속 주행 중이거나, 후진 중이면 AEB 무시 (노이즈 방지)
+    // [표시 안정화] 상대속도 노이즈(-0.01, -0.02 m/s 등)로
+    // 정지 상태에서 TTC가 71s/36s처럼 튀는 현상 방지
+    if (fabsf(s.rel_speed_mps) < 0.05f) {
+        ttc = 999.0f;
+    }
+
+    // 저속 주행 중이면 AEB 무시 + TTC 표시도 안전값으로 고정
     if (s.cur_speed_mps < g_cfg.min_activ_speed_mps) {
+        ttc = 999.0f;
         next_state = DIM_STATE_NORMAL;
     }
 

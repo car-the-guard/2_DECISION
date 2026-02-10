@@ -118,7 +118,7 @@ static void* rx_thread(void* arg) {
 
             case CANID_ACCEL_FB:
                 if (g_rxh.on_accel && fr.can_dlc >= 4) {
-                    uint32_t raw = parse_be32(&fr.data[0]);
+                    int32_t raw = (int32_t)parse_be32(&fr.data[0]);
                     g_rxh.on_accel((float)raw / ACCEL_SCALE);
                 }
                 break;
@@ -137,7 +137,7 @@ static void* rx_thread(void* arg) {
 
             case CANID_SPEED_FB:
                 if (g_rxh.on_speed && fr.can_dlc >= 4) {
-                    uint32_t raw = parse_be32(&fr.data[0]);
+                    int32_t raw = (int32_t)parse_be32(&fr.data[0]);
                     g_rxh.on_speed((float)raw / SPEED_SCALE);
                 }
                 break;
