@@ -49,6 +49,11 @@ static uint32_t parse_be32(const uint8_t* d) {
     memcpy(&val, d, sizeof(uint32_t));
     return be32toh(val);
 }
+
+static int32_t parse_be32s(const uint8_t* d) {
+    return (int32_t)parse_be32(d);
+}
+
 // [유틸] Big Endian 쓰기 헬퍼 (Tx용)
 static void write_be16(uint8_t* d, uint16_t v) {
     uint16_t be_v = htobe16(v);
@@ -118,14 +123,14 @@ static void* rx_thread(void* arg) {
 
             case CANID_ACCEL_FB:
                 if (g_rxh.on_accel && fr.can_dlc >= 4) {
-                    uint32_t raw = parse_be32(&fr.data[0]);
+                    int32_t raw = parse_be32s(&fr.data[0]);
                     g_rxh.on_accel((float)raw / ACCEL_SCALE);
                 }
                 break;
 
             case CANID_REL_SPEED:
                 if (g_rxh.on_rel_speed && fr.can_dlc >= 4) {
-                    int32_t raw = (int32_t)parse_be32(&fr.data[0]);
+                    int32_t raw = parse_be32s(&fr.data[0]);
                     g_rxh.on_rel_speed((float)raw / REL_SPEED_SCALE);
                 }
                 break;
@@ -137,7 +142,7 @@ static void* rx_thread(void* arg) {
 
             case CANID_SPEED_FB:
                 if (g_rxh.on_speed && fr.can_dlc >= 4) {
-                    uint32_t raw = parse_be32(&fr.data[0]);
+                    int32_t raw = parse_be32s(&fr.data[0]);
                     g_rxh.on_speed((float)raw / SPEED_SCALE);
                 }
                 break;

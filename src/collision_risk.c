@@ -16,11 +16,13 @@ static int g_inited = 0;
 static dim_decision_state_t g_prev_state = DIM_STATE_NORMAL;
 static uint32_t g_last_acc_notify_ms = 0;
 
+static const float MIN_CLOSING_REL_SPEED_MPS = 0.10f;
+
 // 기본 설정값 (설정 안 넘어올 시)
 static const crm_config_t default_cfg = {
-    .ttc_warn_sec = 3.0f,
-    .ttc_aeb_sec  = 1.5f,  // 1.5초 이내면 급정거
-    .min_activ_speed_mps = 0.5f 
+    .ttc_warn_sec = 1.0f,
+    .ttc_aeb_sec  = 0.2f,  // 1.5초 이내면 급정거
+    .min_activ_speed_mps = 1.0f 
 };
 
 static uint32_t now_ms(void) {
@@ -60,7 +62,8 @@ static float calculate_ttc(const dim_snapshot_t* s) {
     if (d > 5.0f || d <= 0.0f) return 999.0f;
 
     // [예외 2] 상대 속도가 양수(멀어지는 중)면 충돌 안 함
-    if (v_rel >= 0.0f) return 999.0f;
+    // if (v_rel >= 0.0f) return 999.0f;
+    if (v_rel >= 0.0f || fabsf(v_rel) < MIN_CLOSING_REL_SPEED_MPS) return 999.0f;
 
     // -----------------------------------------------------
     // [공식 적용] 가속도(a_ego)가 거의 0일 때와 아닐 때 구분
@@ -107,6 +110,14 @@ void CRM_run_step(void) {
 
     // 2. TTC 계산
     float ttc = calculate_ttc(&s);
+    // int is_vehicle_moving = (s.cur_speed_mps >= g_cfg.min_activ_speed_mps);
+    int is_vehicle_moving = (s.cur_speed_mps >= g_cfg.min_activ_speed_mps);
+
+    if (g_prev_state == DIM_STATE_CRITICAL) {
+        is_vehicle_moving = 1; // 강제로 활성화 유지
+    }
+
+    if (!is_vehicle_moving) ttc = 999.0f;
     
     // 3. 상태 결정 (FSM Lite)
     dim_decision_state_t next_state = DIM_STATE_NORMAL;
@@ -120,7 +131,7 @@ void CRM_run_step(void) {
     // int force_critical = (s.obj_type == DIM_OBJ_OBSTACLE || s.obj_type == DIM_OBJ_PERSON);
 
     // 저속 주행 중이거나, 후진 중이면 AEB 무시 (노이즈 방지)
-    if (s.cur_speed_mps < g_cfg.min_activ_speed_mps) {
+    if (!is_vehicle_moving) {
         next_state = DIM_STATE_NORMAL;
     }
 
@@ -160,34 +171,29 @@ void CRM_run_step(void) {
         case DIM_STATE_WARNING:
             if (g_cb.set_aeb_cmd)    g_cb.set_aeb_cmd(0); // 아직 제어권은 유지
             if (g_cb.set_brake_lamp) g_cb.set_brake_lamp(1); // 브레이크등 깜빡
-            printf("[CRM] WARNING! TTC: %.2f\n", ttc);
+            // printf("[CRM] WARNING! TTC: %.2f\n", ttc);
+            if (g_prev_state != DIM_STATE_WARNING)
+                printf("[CRM] WARNING! TTC: %.2f\n", ttc);
             break;
 
         case DIM_STATE_CRITICAL : {
             if (g_cb.set_aeb_cmd)    g_cb.set_aeb_cmd(1); // ★ 제어권 뺏기 (강제 정지)
             if (g_cb.set_brake_lamp) g_cb.set_brake_lamp(2); // 브레이크등 점등
             // if (g_cb.notify_accident) g_cb.notify_accident(1); // 필요 시 사고 알림
-
-            uint32_t now = now_ms();
-            int state_entered = (g_prev_state != DIM_STATE_CRITICAL);
-            int periodic_due = (now - g_last_acc_notify_ms >= 500u);
-            if (g_cb.notify_accident && (state_entered || periodic_due)) {
-                g_cb.notify_accident(1); // 필요 시 사고 알림 (진입 시 + 500ms 주기)
-                g_last_acc_notify_ms = now;
-            }
-
-            printf("[CRM] !!!!! AEB ACTIVATED !!!!! TTC: %.2f\n", ttc);
+            
+            if (g_prev_state != DIM_STATE_CRITICAL)
+                printf("[CRM] !!!!! AEB ACTIVATED !!!!! TTC: %.2f\n", ttc);
             break;
         }
     }
     
 
     if (g_cb.set_pretensioner) {
-        // TTC가 유효하고(999 아님) 0.3초 이하이면 동작
-        if (allow_aeb && ((force_critical && ttc <= g_cfg.ttc_warn_sec) || ttc <= 0.3f)){
+        
+        if (is_vehicle_moving && allow_aeb && ((force_critical && ttc <= g_cfg.ttc_warn_sec) || ttc <= 1.0f)){
             g_cb.set_pretensioner(1); // ON
         } else {
-            g_cb.set_pretensioner(0); // OFF
+            // g_cb.set_pretensioner(0); // OFF
         }
     }
 

@@ -27,6 +27,9 @@ static int g_aeb_active = 0;
 static int g_brake_level_crm = 0;
 static int g_brake_level_cresp = 0;
 static pthread_mutex_t g_brake_lock = PTHREAD_MUTEX_INITIALIZER;
+static void cb_cresp_set_brake_lamp(int level);
+
+static void update_brake_lamp(void);
 
 // [메모장] 현재 운전자 명령 저장용 (전역 변수)
 static canif_motor_cmd_t g_current_cmd = {0, 0, 0, 0};
@@ -115,9 +118,17 @@ static void cb_can_ai_lane(uint8_t lane) { DIM_update_lane((dim_lane_t)lane); }
 static void cb_can_ai_obj(uint8_t obj_type) { DIM_update_obj_type((dim_obj_type_t)obj_type); }
 
 static void cb_can_collision_detected(uint8_t is_crash) {
+
     (void)is_crash;
     printf("[Main] !!! PHYSICAL IMPACT DETECTED !!!\n");
-    CRESP_trigger_impact(); 
+    cb_cresp_set_brake_lamp(3);
+    // CRESP_trigger_impact(); 
+    pthread_mutex_lock(&g_brake_lock);
+    g_brake_level_cresp = 3;
+    update_brake_lamp();
+    pthread_mutex_unlock(&g_brake_lock);
+
+    CRESP_trigger_impact();
 }
 
 // static void cb_crm_set_brake_lamp(int level) {
@@ -132,6 +143,20 @@ static void cb_can_collision_detected(uint8_t is_crash) {
 //     }
 // }
 
+// static void update_brake_lamp(void) {
+//     int chosen_level = g_brake_level_cresp > 0 ? g_brake_level_cresp : g_brake_level_crm;
+//     canif_brake_mode_t current_mode = BRAKE_OFF;
+    
+
+//     if (chosen_level == 1) current_mode = BRAKE_ON;
+//     else if (chosen_level >= 2) current_mode = BRAKE_BLINK;
+
+//     static canif_brake_mode_t last_mode = BRAKE_OFF;
+//     if (current_mode != last_mode) {
+//         CANIF_send_brake_light(current_mode);
+//         last_mode = current_mode;
+//     }
+// }
 static void update_brake_lamp(void) {
     int chosen_level = g_brake_level_cresp > 0 ? g_brake_level_cresp : g_brake_level_crm;
     canif_brake_mode_t current_mode = BRAKE_OFF;
@@ -140,7 +165,9 @@ static void update_brake_lamp(void) {
     else if (chosen_level >= 2) current_mode = BRAKE_BLINK;
 
     static canif_brake_mode_t last_mode = BRAKE_OFF;
-    if (current_mode != last_mode) {
+    
+    // [해결] 상태가 바뀌었거나(OR), 비상등(BLINK) 모드면 중복이어도 무조건 쏴라!
+    if (current_mode != last_mode || current_mode == BRAKE_BLINK) {
         CANIF_send_brake_light(current_mode);
         last_mode = current_mode;
     }
@@ -165,6 +192,11 @@ static void cb_crm_set_aeb_cmd(int enable) {
         if (!g_aeb_active) {
             printf("[Main] AEB ENGAGED! (Force Stop)\n");
             g_aeb_active = 1;
+
+            DIM_update_speed(0.0f);
+            DIM_update_accel(0.0f);
+            DIM_update_rel_speed(0.0f);
+
             canif_motor_cmd_t stop = {0, 0, 0, 0};
             CANIF_send_motor_cmd(&stop);
             CANIF_send_aeb(1);
@@ -174,6 +206,15 @@ static void cb_crm_set_aeb_cmd(int enable) {
             printf("[Main] AEB Released.\n");
             g_aeb_active = 0;
             CANIF_send_aeb(0);
+
+            pthread_mutex_lock(&g_cmd_lock);
+            canif_motor_cmd_t resume_cmd = g_current_cmd;
+            pthread_mutex_unlock(&g_cmd_lock);
+
+            if (resume_cmd.fwd > 0 || resume_cmd.bwd > 0 ||
+                resume_cmd.left > 0 || resume_cmd.right > 0) {
+                CANIF_send_motor_cmd(&resume_cmd);
+            }
         }
     }
 }
@@ -265,11 +306,13 @@ int main(int argc, char** argv) {
             dim_snapshot_t s;
             DIM_get_snapshot(&s);
 
-            printf("[DASH] SPD: %4.1f m/s | ACC: %5.2f m/s2 | SONAR: %5.1f cm | TTC: %5.1fs | HEADING: %3d deg\n", 
+            printf("REL: %5.2f m/s |SPD: %4.1f m/s | ACC: %5.2f m/s2 | SONAR: %5.1f cm | TTC: %5.1fs | HEADING: %3d deg\n",
+                     s.rel_speed_mps,    // 상대 속도 
                    s.cur_speed_mps,    // 엔코더 속도
                    s.cur_accel_mps2,   // 가속도
                    s.ultra_dist_cm,    // 초음파 거리
                    s.calc_ttc_sec,      // TTC (충돌 예측 시간)
+                   s.calc_ttc_sec,     // TTC (충돌 예측 시간)
                    s.heading_deg
             );
             fflush(stdout); // 즉시 화면에 표시
