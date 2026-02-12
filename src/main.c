@@ -31,6 +31,8 @@ static void cb_cresp_set_brake_lamp(int level);
 
 static void update_brake_lamp(void);
 
+static pthread_mutex_t g_wl_lock = PTHREAD_MUTEX_INITIALIZER; // UART 보호용 락
+
 // [메모장] 현재 운전자 명령 저장용 (전역 변수)
 static canif_motor_cmd_t g_current_cmd = {0, 0, 0, 0};
 static struct timespec g_last_bt_time = {0, 0}; // 마지막 수신 시간
@@ -114,64 +116,80 @@ static void cb_can_rel_speed(float rel_mps) { DIM_update_rel_speed(rel_mps); }
 static void cb_can_heading(uint16_t deg) { DIM_update_heading(deg); CRESP_update_heading(deg); }
 // static void cb_can_ai_lane(uint8_t lane) { DIM_update_lane((dim_lane_t)lane); }
 // static void cb_can_ai_obj(uint8_t obj_type) { DIM_update_obj_type((dim_obj_type_t)obj_type); }
-static void cb_can_ai_lane(uint8_t lane) { DIM_update_lane((dim_lane_t)lane); }
-static void cb_can_ai_obj(uint8_t obj_type) { DIM_update_obj_type((dim_obj_type_t)obj_type); }
+
+static void cb_can_ai_lane(uint8_t lane) { 
+    DIM_update_lane((dim_lane_t)lane); 
+
+    static struct timespec last_print = {0};
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+
+    // 밀리초 단위 차이 계산
+    long long diff_ms = (now.tv_sec - last_print.tv_sec) * 1000 + 
+                        (now.tv_nsec - last_print.tv_nsec) / 1000000;
+
+    if (diff_ms >= 5000) { // 5초 경과 시 출력
+        // printf("****************Lane Updated: %d ****************\n", lane);
+        last_print = now;
+    }
+}
+
+// [수정] 객체 정보 수신 콜백 (1초에 한 번 출력)
+static void cb_can_ai_obj(uint8_t obj_type) { 
+    DIM_update_obj_type((dim_obj_type_t)obj_type); 
+
+    static struct timespec last_print = {0};
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+
+    long long diff_ms = (now.tv_sec - last_print.tv_sec) * 1000 + 
+                        (now.tv_nsec - last_print.tv_nsec) / 1000000;
+
+    if (diff_ms >= 5000) { // 1초 경과 시 출력
+        // printf("******** AI Obj Type: %d ********\n", obj_type);
+        last_print = now;
+    }
+}
 
 static void cb_can_collision_detected(uint8_t is_crash) {
 
-    (void)is_crash;
     printf("[Main] !!! PHYSICAL IMPACT DETECTED !!!\n");
+
+    if (is_crash == 0) return;
+
     cb_cresp_set_brake_lamp(3);
+
     // CRESP_trigger_impact(); 
-    pthread_mutex_lock(&g_brake_lock);
-    g_brake_level_cresp = 3;
-    update_brake_lamp();
-    pthread_mutex_unlock(&g_brake_lock);
 
     CRESP_trigger_impact();
 }
 
-// static void cb_crm_set_brake_lamp(int level) {
-//     canif_brake_mode_t current_mode = BRAKE_OFF;
-//     if (level == 1) current_mode = BRAKE_ON;
-//     else if (level >= 2) current_mode = BRAKE_BLINK;
-
-//     static canif_brake_mode_t last_mode = BRAKE_OFF;
-//     if (current_mode != last_mode) {
-//         CANIF_send_brake_light(current_mode);
-//         last_mode = current_mode;
-//     }
-// }
-
-// static void update_brake_lamp(void) {
-//     int chosen_level = g_brake_level_cresp > 0 ? g_brake_level_cresp : g_brake_level_crm;
-//     canif_brake_mode_t current_mode = BRAKE_OFF;
-    
-
-//     if (chosen_level == 1) current_mode = BRAKE_ON;
-//     else if (chosen_level >= 2) current_mode = BRAKE_BLINK;
-
-//     static canif_brake_mode_t last_mode = BRAKE_OFF;
-//     if (current_mode != last_mode) {
-//         CANIF_send_brake_light(current_mode);
-//         last_mode = current_mode;
-//     }
-// }
 static void update_brake_lamp(void) {
-    int chosen_level = g_brake_level_cresp > 0 ? g_brake_level_cresp : g_brake_level_crm;
-    canif_brake_mode_t current_mode = BRAKE_OFF;
+    int lvl = (g_brake_level_cresp > 0) ? g_brake_level_cresp : g_brake_level_crm;
 
-    if (chosen_level == 1) current_mode = BRAKE_ON;
-    else if (chosen_level >= 2) current_mode = BRAKE_BLINK;
+    // AEB가 잡혀있으면 최소 2단계 밑으로 못 내려가게 래치
+    if (g_aeb_active && lvl < 2) lvl = 2;
 
-    static canif_brake_mode_t last_mode = BRAKE_OFF;
-    
-    // [해결] 상태가 바뀌었거나(OR), 비상등(BLINK) 모드면 중복이어도 무조건 쏴라!
-    if (current_mode != last_mode || current_mode == BRAKE_BLINK) {
-        CANIF_send_brake_light(current_mode);
-        last_mode = current_mode;
+    canif_brake_mode_t mode = BRAKE_OFF;
+    switch (lvl) {
+        case 0: mode = BRAKE_OFF;   break;
+        // WARNING should send 1 over CAN
+        case 1: mode = BRAKE_ON;    break;   // WARNING = 1
+        // CRITICAL / AEB should send 2 over CAN
+        case 2: mode = BRAKE_BLINK; break;   // AEB/CRITICAL = 2
+        case 3: mode = BRAKE_CRASH; break;   // 충돌 = 3
+        default: mode = BRAKE_OFF;  break;
+    }
+
+    static canif_brake_mode_t last = (canif_brake_mode_t)-1;
+
+    // 수신측이 상태 유지/점멸을 내부에서 처리한다면 "변경시에만" 보내는 게 맞다
+    if (mode != last) {
+        CANIF_send_brake_light(mode);
+        last = mode;
     }
 }
+
 
 static void cb_crm_set_brake_lamp(int level) {
     pthread_mutex_lock(&g_brake_lock);
@@ -193,9 +211,9 @@ static void cb_crm_set_aeb_cmd(int enable) {
             printf("[Main] AEB ENGAGED! (Force Stop)\n");
             g_aeb_active = 1;
 
-            DIM_update_speed(0.0f);
-            DIM_update_accel(0.0f);
-            DIM_update_rel_speed(0.0f);
+            // DIM_update_speed(0.0f);
+            // DIM_update_accel(0.0f);
+            // DIM_update_rel_speed(0.0f);
 
             canif_motor_cmd_t stop = {0, 0, 0, 0};
             CANIF_send_motor_cmd(&stop);
@@ -234,7 +252,10 @@ static void cb_crm_set_pretensioner(int active) {
     }
 }
 
-static void cb_crm_notify_accident(int severity) { WL_send_accident((uint8_t)severity); }
+static void cb_crm_notify_accident(int severity) {
+    pthread_mutex_lock(&g_wl_lock);
+    WL_send_accident((uint8_t)severity);
+    pthread_mutex_unlock(&g_wl_lock);}
 static void cb_cresp_notify_accident(int severity) { WL_send_accident((uint8_t)severity); }
 
 // =========================================================
@@ -295,27 +316,43 @@ int main(int argc, char** argv) {
     // printf("=== System Started. Loop Running. ===\n");
 
     uint32_t loop_count = 0;
-    clock_gettime(CLOCK_MONOTONIC, &g_last_bt_time); // 초기 시간 설정
+    clock_gettime(CLOCK_MONOTONIC, &g_last_bt_time);
 
     while (g_running) {
         CRM_run_step();
 
-        if (loop_count % 500 == 0) WL_send_direction(); // (NULL이라 아무 일도 안 함)
+        if (loop_count % 1500 == 0) WL_send_direction();
 
         if (loop_count % 5 == 0) {
             dim_snapshot_t s;
             DIM_get_snapshot(&s);
 
             printf("REL: %5.2f m/s |SPD: %4.1f m/s | ACC: %5.2f m/s2 | SONAR: %5.1f cm | TTC: %5.1fs | HEADING: %3d deg\n",
-                     s.rel_speed_mps,    // 상대 속도 
+                   s.rel_speed_mps,    // 상대 속도 
                    s.cur_speed_mps,    // 엔코더 속도
                    s.cur_accel_mps2,   // 가속도
                    s.ultra_dist_cm,    // 초음파 거리
                    s.calc_ttc_sec,      // TTC (충돌 예측 시간)
-                   s.calc_ttc_sec,     // TTC (충돌 예측 시간)
                    s.heading_deg
             );
             fflush(stdout); // 즉시 화면에 표시
+        }
+
+        if (loop_count % 500 == 0) { // 10ms * 500 = 5000ms (5초)
+            dim_snapshot_t s;
+            DIM_get_snapshot(&s);
+
+            // [요청사항 반영]
+            // 데이터가 안 들어와서 0(초기값) 상태라면 -> 차선은 1, 객체는 0으로 간주해서 출력
+            int show_lane = (s.lane == 0) ? 1 : s.lane;
+            int show_obj  = s.obj_type; 
+
+            printf("\n"); // 줄바꿈으로 구분
+            printf("****************Lane Updated: %d ****************\n", show_lane);
+            printf("******** AI Obj Type: %d ********\n", show_obj);
+            printf("\n");
+            
+            fflush(stdout);
         }
 
         // ----------------------------------------------------------------

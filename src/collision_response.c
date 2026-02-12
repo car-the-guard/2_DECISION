@@ -179,10 +179,8 @@ void CRESP_stop(void) {
 
 // [Trigger] 충돌 발생! (CAN 0x08 수신 시 호출)
 void CRESP_trigger_impact(void) {
-    pthread_mutex_lock(&g_mtx);
     g_collision_seq++;
     pthread_cond_signal(&g_cv);
-    pthread_mutex_unlock(&g_mtx);
 }
 
 // [Input] 헤딩 업데이트 (흔들림 감지용)

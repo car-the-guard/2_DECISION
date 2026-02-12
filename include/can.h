@@ -35,7 +35,8 @@ extern "C" {
 typedef enum {
     BRAKE_OFF = 0,
     BRAKE_ON = 1,
-    BRAKE_BLINK = 2
+    BRAKE_BLINK = 2,
+    BRAKE_CRASH = 3
 } canif_brake_mode_t;
 
 // 설정 구조체

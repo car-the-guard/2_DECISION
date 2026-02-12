@@ -56,7 +56,7 @@ void DIM_update_ultra(float cm) {
 
 void DIM_update_heading(uint16_t deg) {
     pthread_rwlock_wrlock(&g_rw);
-    g_s.heading_deg = deg;
+    g_s.heading_deg = 0;
     pthread_rwlock_unlock(&g_rw);
 }
 

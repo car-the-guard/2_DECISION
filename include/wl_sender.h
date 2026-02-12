@@ -56,28 +56,6 @@ typedef struct __attribute__((packed)) {
     uint16_t direction;     // 지자기 방향
 } wl4_payload_t;
 
-
-// [수정] WL-4 패킷 (Union 적용)
-// typedef struct __attribute__((packed)) {
-//     uint8_t  stx;           // 0xFD
-//     uint8_t  type;          // 4
-//     uint8_t  reserved_pad;  // 0x00
-//     uint16_t timestamp;     // 2 Bytes
-    
-//     // [핵심] Union을 사용하여 비트 필드와 Raw 값을 동시에 접근
-//     union {
-//         // 1. 편하게 값 넣기용 (비트 필드)
-//         struct {
-//             uint16_t reserved  : 7; // [LSB] 하위 7비트
-//             uint16_t direction : 9; // [MSB] 상위 9비트
-//         } bits;
-        
-//         // 2. 엔디안 변환 및 전송용 (16비트 통짜)
-//         uint16_t raw; 
-//     } payload;
-
-//     uint8_t  etx;           // 0xFE
-// } wl4_packet_t;
 typedef struct __attribute__((packed)) {
     uint8_t  stx;             // [0] 0xFD
     uint8_t  type;            // [1] 0x04
@@ -104,6 +82,8 @@ int WL_init(wl_send_fn send_func);
 // [WL-3] 사고 정보 전송 (CRM/CRESP에서 호출)
 // severity: 1(주의), 2(사고), 3(대형사고)
 void WL_send_accident(uint8_t severity);
+
+void WL_deinit(void);
 
 // [WL-4] 주행 방향 주기적 전송 (필요 시 호출)
 void WL_send_direction(void);

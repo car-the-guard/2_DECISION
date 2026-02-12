@@ -132,6 +132,36 @@ void WL_send_accident(uint8_t severity) {
 //     // 디버깅 (필요 시 주석 해제)
 //     // printf("[WL] Sent WL-4 (Dir) Deg:%d, Size:%lu\n", s.heading_deg, sizeof(pkt));
 // }
+
+// void WL_send_direction(void) {
+//     if (!g_send_fn) return;
+
+//     dim_snapshot_t s;
+//     if (DIM_get_snapshot(&s) != 0) return;
+
+//     wl4_packet_t pkt;
+//     memset(&pkt, 0, sizeof(pkt));
+
+//     // 1. 프레임 헤더
+//     pkt.stx = 0xFD;
+//     pkt.type = 0x04;
+//     pkt.reserved_pad = 0x00;
+    
+//     // [Big Endian 변환]
+//     pkt.timestamp = htobe16((uint16_t)(get_uptime_ms() & 0xFFFF));
+
+//     // 2. 데이터
+//     // [Big Endian 변환]
+//     uint16_t heading = norm_heading_deg((int)s.heading_deg);
+//     pkt.direction = htobe16(heading);
+
+//     // 3. 트레일러
+//     pkt.etx = 0xFE;
+
+//     // 4. 전송
+//     g_send_fn((const uint8_t*)&pkt, sizeof(pkt));
+// }
+
 void WL_send_direction(void) {
     if (!g_send_fn) return;
 
@@ -141,22 +171,18 @@ void WL_send_direction(void) {
     wl4_packet_t pkt;
     memset(&pkt, 0, sizeof(pkt));
 
-    // 1. 프레임 헤더
     pkt.stx = 0xFD;
     pkt.type = 0x04;
     pkt.reserved_pad = 0x00;
-    
-    // [Big Endian 변환]
+
     pkt.timestamp = htobe16((uint16_t)(get_uptime_ms() & 0xFFFF));
 
-    // 2. 데이터
-    // [Big Endian 변환]
-    uint16_t heading = norm_heading_deg((int)s.heading_deg);
+    uint16_t heading = 0;
     pkt.direction = htobe16(heading);
 
-    // 3. 트레일러
     pkt.etx = 0xFE;
 
-    // 4. 전송
     g_send_fn((const uint8_t*)&pkt, sizeof(pkt));
+
+    printf("[WL] Sent WL-4 (Dir) Deg:%d, Size:%lu\n", s.heading_deg, sizeof(pkt));
 }
